@@ -159,6 +159,39 @@ async fn recover_turn_restores_cyber_access_program_without_making_it_sticky() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_program_applies_to_new_turns_but_explicit_selection_wins() -> Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.cyber_access_program = Some(CyberAccessProgram::DaybreakBlue);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    for (program, expected) in [
+        (None, "daybreak_blue"),
+        (Some(CyberAccessProgram::Standard), "standard"),
+        (Some(CyberAccessProgram::DaybreakRed), "daybreak_red"),
+        (None, "daybreak_blue"),
+    ] {
+        let request = responses::mount_sse_once(
+            &server,
+            responses::sse_completed("configured-program-response"),
+        )
+        .await;
+        submit(&test, program).await?;
+        assert_eq!(
+            request.single_request().body_json()["access_programs"],
+            json!({"cyber": expected})
+        );
+    }
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cyber_access_program_omits_api_key_and_spoofed_custom_provider() -> Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
     for (auth, provider_id) in [
@@ -176,12 +209,26 @@ async fn cyber_access_program_omits_api_key_and_spoofed_custom_provider() -> Res
             .with_config(move |config| {
                 // Keep the display name "OpenAI": provider identity must not use it.
                 config.model_provider_id = provider_id.to_owned();
+                config.cyber_access_program = Some(CyberAccessProgram::DaybreakBlue);
             })
             .build_with_auto_env(&server)
             .await?;
         submit(&test, Some(CyberAccessProgram::DaybreakRed)).await?;
         assert_eq!(
             request.single_request().body_json().get("access_programs"),
+            None
+        );
+        let default_request = responses::mount_sse_once(
+            &server,
+            responses::sse_completed("configured-program-omitted"),
+        )
+        .await;
+        submit(&test, /*program*/ None).await?;
+        assert_eq!(
+            default_request
+                .single_request()
+                .body_json()
+                .get("access_programs"),
             None
         );
     }

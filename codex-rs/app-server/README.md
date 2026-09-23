@@ -30,6 +30,16 @@ the choice unset. Ephemeral threads cannot save it.
 Use `thread/metadata/update` for later changes. This preference does not select
 `turn/start.cyberAccessProgram` or grant access to an access program.
 
+For a default on new native OpenAI, ChatGPT-authenticated turns, set
+`cyber_access_program = "daybreak_blue"` in the server's Codex configuration.
+The accepted values are `standard`, `daybreak_blue`, and `daybreak_red`.
+Explicit `turn/start.cyberAccessProgram` values take precedence, including
+`standard`. When both are omitted, existing automatic behavior is preserved.
+The default also applies to automatic goal continuations, but does not change
+an active turn. This selects a requested program; backend entitlement and
+model-compatibility checks still apply, and failures do not trigger a fallback
+to another program. API-key and custom-provider requests are unchanged.
+
 # Application network policy
 
 App-server loads application network policy at startup and existing explicit

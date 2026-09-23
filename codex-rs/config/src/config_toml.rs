@@ -54,6 +54,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::turn_input::CyberAccessProgram;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::normalize_for_path_comparison;
 use codex_utils_path_uri::Platform;
@@ -166,6 +167,10 @@ pub struct FeatureToggleToml {
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
+    /// Default cyber access program for new native OpenAI, ChatGPT-authenticated
+    /// turns. An explicit turn selection takes precedence. Omission preserves
+    /// automatic behavior; entitlement and model restrictions remain server-owned.
+    pub cyber_access_program: Option<CyberAccessProgram>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
 
@@ -1027,6 +1032,29 @@ mod tests {
 
     const WORKSPACE_ID_A: &str = "123e4567-e89b-42d3-a456-426614174000";
     const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
+
+    #[test]
+    fn cyber_access_program_parses_explicit_choices_and_omission() {
+        for (input, expected) in [
+            ("", None),
+            (
+                r#"cyber_access_program = "standard""#,
+                Some(CyberAccessProgram::Standard),
+            ),
+            (
+                r#"cyber_access_program = "daybreak_blue""#,
+                Some(CyberAccessProgram::DaybreakBlue),
+            ),
+            (
+                r#"cyber_access_program = "daybreak_red""#,
+                Some(CyberAccessProgram::DaybreakRed),
+            ),
+        ] {
+            let config: ConfigToml = toml::from_str(input).expect("valid access program");
+            assert_eq!(config.cyber_access_program, expected);
+        }
+        assert!(toml::from_str::<ConfigToml>(r#"cyber_access_program = "daybreakBlue""#).is_err());
+    }
 
     #[test]
     fn sandbox_mode_uses_executor_platform_and_sandbox_level() {

@@ -1273,7 +1273,9 @@ impl Session {
 
         turn_context.final_output_json_schema = options.final_output_json_schema;
         if turn_context.config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID {
-            turn_context.cyber_access_program = options.cyber_access_program;
+            turn_context.cyber_access_program = options
+                .cyber_access_program
+                .or(turn_context.config.cyber_access_program);
         }
         let turn_context = Arc::new(turn_context);
         if git_enrichment_policy == GitEnrichmentPolicy::Fresh

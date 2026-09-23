@@ -127,6 +127,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::turn_input::CyberAccessProgram;
 use codex_rmcp_client::McpOAuthRefreshMode;
 use codex_sandboxing::SandboxType;
 pub use codex_thread_store::ExtraConfig;
@@ -619,6 +620,9 @@ pub struct Config {
 
     /// Optional override of model selection.
     pub model: Option<String>,
+
+    /// Default program for new native OpenAI turns; sent only with ChatGPT auth.
+    pub cyber_access_program: Option<CyberAccessProgram>,
 
     /// Effective service tier request id preference for new turns.
     /// `default` means the user explicitly selected standard routing.
@@ -4237,6 +4241,7 @@ impl Config {
         let config = Self {
             prefer_mxc,
             model,
+            cyber_access_program: cfg.cyber_access_program,
             service_tier,
             review_model,
             model_context_window: cfg.model_context_window,
