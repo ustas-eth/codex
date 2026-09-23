@@ -24,6 +24,7 @@ use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::context::ContextualUserFragment;
 use crate::context::DeveloperInstructions;
+use crate::context::GuardianContextMode;
 use crate::context::GuardianPolicy;
 use crate::context::ManagedDeveloperInstructions;
 use crate::context::ModelSwitchInstructions;
@@ -725,16 +726,6 @@ impl Session {
                 &model_info,
             )?;
             token_budget::apply_model_defaults(Arc::make_mut(&mut config), &model_info);
-            if config
-                .token_budget
-                .as_ref()
-                .is_some_and(|token_budget| token_budget.use_history_notes_extension)
-                && !model_info.supports_experimental_context
-            {
-                return Err(CodexErr::InvalidRequest(format!(
-                    "features.token_budget.use_history_notes_extension is not supported by model `{model}`; disable it or select a model that supports experimental context"
-                )));
-            }
         }
         let configured_config = Arc::clone(&config);
         let multi_agent_version = config.multi_agent_version_override().or_else(|| {
@@ -1080,7 +1071,7 @@ pub(crate) fn new_submission_id() -> String {
     Uuid::now_v7().to_string()
 }
 
-fn get_service_tier(
+pub(crate) fn get_service_tier(
     configured_service_tier: Option<String>,
     fast_mode_enabled: bool,
     model_info: &ModelInfo,
@@ -2995,6 +2986,7 @@ impl Session {
             };
             let action = ApprovalAction::RequestPermissions {
                 id: call_id.clone(),
+                environment_id: environment_selection.environment_id.clone(),
                 turn_id: turn_context.sub_id.clone(),
                 reason: args.reason.clone(),
                 permissions: requested_permissions.clone(),
@@ -3621,19 +3613,38 @@ impl Session {
             state
                 .current_time_reminder
                 .note_recorded_items(&response_items);
-            if self.guardian_context_mode == crate::context::GuardianContextMode::ThreadOwned {
+            if self.guardian_context_mode == GuardianContextMode::ThreadOwned {
+                let pending_orders = turn_context
+                    .extension_data
+                    .get::<retained_context::PendingAssistantMessageOrders>();
                 for envelope in &mut items {
+                    if envelope
+                        .metadata
+                        .as_ref()
+                        .is_some_and(|metadata| metadata.compaction_output)
+                    {
+                        continue;
+                    }
                     if matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "assistant")
                         || matches!(&envelope.item, ResponseItem::FunctionCall { .. })
                         || crate::context::is_user_authorization_message(&envelope.item)
                     {
-                        // Share accepted input order with recorded assistant messages and calls.
-                        // A call's result can arrive after a reply; it must not move the question.
+                        let message_order = pending_orders.as_ref().and_then(|orders| {
+                            orders
+                                .0
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .remove(envelope.item.id()?.as_str())
+                        });
+                        // Preserve input acceptance and source-message start order.
+                        // Synthetic messages still receive their order here.
                         envelope
                             .metadata
                             .get_or_insert_default()
                             .user_input_order
-                            .get_or_insert_with(|| state.history.reserve_input_order());
+                            .get_or_insert_with(|| {
+                                message_order.unwrap_or_else(|| state.history.reserve_input_order())
+                            });
                     }
                 }
             }
@@ -3927,6 +3938,7 @@ impl Session {
         ) = prepared_tools??;
         turn_context.extension_data.insert(selected_plugins);
         Ok(Arc::new(StepContext {
+            realtime: self.conversation.snapshot().await,
             settings,
             token_budget,
             session_telemetry,

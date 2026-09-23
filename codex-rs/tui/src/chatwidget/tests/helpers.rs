@@ -2,7 +2,6 @@ use super::*;
 use codex_app_server_protocol::ImageGenerationItem;
 use codex_app_server_protocol::PluginAvailability;
 use codex_utils_absolute_path::test_support::PathExt;
-use pretty_assertions::assert_eq;
 
 pub(super) async fn test_config() -> Config {
     // Start from the built-in defaults so tests do not inherit host/system config.
@@ -968,6 +967,7 @@ pub(super) fn begin_exec_with_source(
         .collect();
     let item = AppServerThreadItem::CommandExecution {
         model_context: None,
+        sandbox_type: None,
         id: call_id.to_string(),
         command: codex_shell_command::parse_command::shlex_join(&command),
         cwd: chat.config.cwd.clone().into(),
@@ -994,6 +994,7 @@ pub(super) fn begin_unified_exec_startup(
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
     let item = AppServerThreadItem::CommandExecution {
         model_context: None,
+        sandbox_type: None,
         id: call_id.to_string(),
         command: codex_shell_command::parse_command::shlex_join(&command),
         cwd: chat.config.cwd.clone().into(),
@@ -1229,6 +1230,7 @@ pub(super) fn end_exec(
         chat,
         AppServerThreadItem::CommandExecution {
             model_context: None,
+            sandbox_type: None,
             id,
             command,
             cwd,
@@ -1306,43 +1308,6 @@ pub(super) fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset
         .find(|&preset| preset.model == model)
         .cloned()
         .unwrap_or_else(|| panic!("{model} preset not found"))
-}
-
-pub(super) async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
-    terminal_info: TerminalInfo,
-) {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.queued_message_edit_hint_binding =
-        Some(queued_message_edit_binding_for_terminal(terminal_info).into());
-    chat.bottom_pane
-        .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
-
-    // Simulate a running task so messages would normally be queued.
-    chat.bottom_pane.set_task_running(/*running*/ true);
-
-    // Seed two queued messages.
-    chat.input_queue
-        .queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()).into());
-    chat.input_queue
-        .queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()).into());
-    chat.refresh_pending_input_preview();
-
-    // Press Shift+Left to edit the most recent (last) queued message.
-    chat.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-
-    // Composer should now contain the last queued message.
-    assert_eq!(
-        chat.bottom_pane.composer_text(),
-        "second queued".to_string()
-    );
-    // And the queue should now contain only the remaining (older) item.
-    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
-    assert_eq!(
-        chat.input_queue.queued_user_messages.front().unwrap().text,
-        "first queued"
-    );
 }
 
 pub(super) fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
