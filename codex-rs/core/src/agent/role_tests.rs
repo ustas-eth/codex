@@ -127,6 +127,50 @@ cyber_access_program = "auto"
 }
 
 #[tokio::test]
+async fn cyber_access_program_resume_does_not_reapply_other_role_settings() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let role_path = write_role_config(
+        &home,
+        "worker.toml",
+        r#"
+model = "role-model"
+developer_instructions = "role instructions"
+cyber_access_program = "auto"
+"#,
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+    let mut expected = config.clone();
+    expected.cyber_access_program = Some(CyberAccessProgramPreference::Auto);
+    apply_role_cyber_preferences_on_resume(&mut config, "custom")
+        .await
+        .expect("restore cyber preference");
+    let layer = config.config_layer_stack.effective_config();
+    assert_eq!(
+        layer.get("model"),
+        expected.config_layer_stack.effective_config().get("model")
+    );
+    assert_eq!(
+        layer.get("developer_instructions"),
+        expected
+            .config_layer_stack
+            .effective_config()
+            .get("developer_instructions")
+    );
+    // The projected config layer is intentionally new; all other runtime settings
+    // must match the parent-derived resume config except the selected preference.
+    expected.config_layer_stack = config.config_layer_stack.clone();
+    assert_eq!(config, expected);
+}
+
+#[tokio::test]
 async fn apply_role_returns_error_for_unknown_role() {
     let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
 

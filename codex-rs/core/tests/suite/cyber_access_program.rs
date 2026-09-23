@@ -406,7 +406,7 @@ async fn cyber_access_program_is_inherited_by_child_turns(child_selection: &str)
                         "auto_worker".to_string(),
                         codex_core::config::AgentRoleConfig {
                             description: None,
-                            config_file: Some(role_path),
+                            config_file: Some(role_path.to_path_buf()),
                             nickname_candidates: None,
                         },
                     );

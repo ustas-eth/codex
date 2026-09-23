@@ -167,8 +167,9 @@ pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
     /// Default cyber access program for new native OpenAI, ChatGPT-authenticated
-    /// turns. An explicit turn selection takes precedence. Omission preserves
-    /// automatic behavior; entitlement and model restrictions remain server-owned.
+    /// turns without an exact-model override. Explicit turn choices take precedence.
+    /// Omission retains parent inheritance or backend automatic selection.
+    /// Entitlement and model restrictions remain server-owned.
     pub cyber_access_program: Option<CyberAccessProgramPreference>,
     /// Exact model-id overrides for the default cyber access program. `auto`
     /// leaves selection to the backend, including when a global default is set.

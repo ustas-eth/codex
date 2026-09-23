@@ -133,6 +133,34 @@ async fn apply_role_to_config_inner(
     Ok(())
 }
 
+/// Restores cyber preferences on the legacy V1 resume path without changing its
+/// existing restoration of model, instructions, permissions, or other settings.
+pub(crate) async fn apply_role_cyber_preferences_on_resume(
+    config: &mut Config,
+    role_name: &str,
+) -> Result<(), String> {
+    // Older threads may refer to a role that is no longer configured.
+    if resolve_role_config(config, role_name).is_none() {
+        return Ok(());
+    }
+    let mut role_config = config.clone();
+    apply_role_to_config(&mut role_config, Some(role_name)).await?;
+    if role_config.cyber_access_program == config.cyber_access_program
+        && role_config.cyber_access_program_by_model == config.cyber_access_program_by_model
+    {
+        return Ok(());
+    }
+    let overrides = AgentRoleOverrides {
+        cyber_access_program: role_config.cyber_access_program,
+        cyber_access_program_by_model: role_config.cyber_access_program_by_model,
+        ..Default::default()
+    };
+    let layer = TomlValue::try_from(&overrides).map_err(|err| err.to_string())?;
+    *config = role_overrides::build_next_config(config, layer, &overrides)
+        .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
 async fn load_role_layer_toml(
     config: &Config,
     config_file: &Path,

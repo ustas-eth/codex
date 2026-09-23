@@ -6557,7 +6557,7 @@
           "$ref": "#/definitions/CyberAccessProgramPreference"
         }
       ],
-      "description": "Default cyber access program for new native OpenAI, ChatGPT-authenticated turns. An explicit turn selection takes precedence. Omission preserves automatic behavior; entitlement and model restrictions remain server-owned."
+      "description": "Default cyber access program for new native OpenAI, ChatGPT-authenticated turns without an exact-model override. Explicit turn choices take precedence. Omission retains parent inheritance or backend automatic selection. Entitlement and model restrictions remain server-owned."
     },
     "cyber_access_program_by_model": {
       "additionalProperties": {
