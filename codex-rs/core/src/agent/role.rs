@@ -11,6 +11,7 @@ use codex_agent_roles::parse_agent_role_file_contents;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
+use codex_config::CyberAccessProgramPreference;
 use codex_config::SkillsConfig;
 use codex_config::loader::resolve_relative_paths_in_config_toml;
 use codex_exec_server::read_sensitive_file_to_string;
@@ -42,6 +43,9 @@ struct AgentRoleOverrides {
     model_verbosity: Option<Verbosity>,
     personality: Option<Personality>,
     service_tier: Option<String>,
+    cyber_access_program: Option<CyberAccessProgramPreference>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    cyber_access_program_by_model: BTreeMap<String, CyberAccessProgramPreference>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     features: BTreeMap<String, bool>,
     skills: Option<SkillsConfig>,
@@ -85,6 +89,8 @@ async fn apply_role_to_config_inner(
         model_verbosity: role_config.model_verbosity,
         personality: role_config.personality,
         service_tier: role_config.service_tier,
+        cyber_access_program: role_config.cyber_access_program,
+        cyber_access_program_by_model: role_config.cyber_access_program_by_model,
         ..Default::default()
     };
 
@@ -180,6 +186,12 @@ mod role_overrides {
         overrides: &AgentRoleOverrides,
     ) -> anyhow::Result<Config> {
         let mut next_config = config.clone();
+        if let Some(preference) = overrides.cyber_access_program {
+            next_config.cyber_access_program = Some(preference);
+        }
+        next_config
+            .cyber_access_program_by_model
+            .extend(overrides.cyber_access_program_by_model.clone());
         next_config.config_layer_stack = build_config_layer_stack(config, &role_layer_toml)?;
         if let Some(model) = &overrides.model {
             next_config.model = Some(model.clone());

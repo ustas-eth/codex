@@ -1368,9 +1368,10 @@
       ],
       "type": "string"
     },
-    "CyberAccessProgram": {
-      "description": "Requested cyber treatment for a ChatGPT-authenticated Codex turn. Authorization and model-tier restrictions remain server-owned.",
+    "CyberAccessProgramPreference": {
+      "description": "Configured cyber treatment. `auto` omits the request field, even when a parent turn used an explicit program. Authorization remains server-owned.",
       "enum": [
+        "auto",
         "standard",
         "daybreak_blue",
         "daybreak_red"
@@ -6518,10 +6519,18 @@
     "cyber_access_program": {
       "allOf": [
         {
-          "$ref": "#/definitions/CyberAccessProgram"
+          "$ref": "#/definitions/CyberAccessProgramPreference"
         }
       ],
       "description": "Default cyber access program for new native OpenAI, ChatGPT-authenticated turns. An explicit turn selection takes precedence. Omission preserves automatic behavior; entitlement and model restrictions remain server-owned."
+    },
+    "cyber_access_program_by_model": {
+      "additionalProperties": {
+        "$ref": "#/definitions/CyberAccessProgramPreference"
+      },
+      "default": {},
+      "description": "Exact model-id overrides for the default cyber access program. `auto` leaves selection to the backend, including when a global default is set.",
+      "type": "object"
     },
     "default_permissions": {
       "description": "Default permissions profile to apply. Names starting with `:` refer to built-in profiles; other names are resolved from the `[permissions]` table.",

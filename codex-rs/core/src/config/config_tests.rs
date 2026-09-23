@@ -8229,6 +8229,61 @@ fn profile_v2_config_path_resolves_validated_names() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn cyber_access_program_profile_overrides_defaults_and_merges_models() -> anyhow::Result<()> {
+    use codex_config::CyberAccessProgramPreference;
+    let home = TempDir::new()?;
+    tokio::fs::write(
+        home.path().join(CONFIG_TOML_FILE),
+        r#"
+cyber_access_program = "daybreak_blue"
+[cyber_access_program_by_model]
+"gpt-6-astra" = "standard"
+"gpt-6-sol" = "daybreak_blue"
+"#,
+    )
+    .await?;
+    let profile = home.path().join("worker.config.toml");
+    tokio::fs::write(
+        &profile,
+        r#"
+cyber_access_program = "auto"
+[cyber_access_program_by_model]
+"gpt-6-astra" = "auto"
+"#,
+    )
+    .await?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(home.path().to_path_buf())
+        .loader_overrides(LoaderOverrides {
+            user_config_path: Some(profile.abs()),
+            user_config_profile: Some("worker".parse()?),
+            ..LoaderOverrides::without_managed_config_for_tests()
+        })
+        .build()
+        .await?;
+    assert_eq!(
+        (
+            config.cyber_access_program,
+            config.cyber_access_program_by_model
+        ),
+        (
+            Some(CyberAccessProgramPreference::Auto),
+            BTreeMap::from([
+                (
+                    "gpt-6-astra".to_string(),
+                    CyberAccessProgramPreference::Auto
+                ),
+                (
+                    "gpt-6-sol".to_string(),
+                    CyberAccessProgramPreference::DaybreakBlue
+                ),
+            ])
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn set_model_overwrites_existing_model() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
     let config_path = codex_home.path().join(CONFIG_TOML_FILE);

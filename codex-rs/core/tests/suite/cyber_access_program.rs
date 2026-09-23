@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_config::CyberAccessProgramPreference;
 use codex_core::RecoverTurnRequest;
 use codex_core::StartIfIdleSubmission;
 use codex_core::TurnInputRequest;
@@ -165,7 +166,7 @@ async fn configured_program_applies_to_new_turns_but_explicit_selection_wins() -
     let test = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.cyber_access_program = Some(CyberAccessProgram::DaybreakBlue);
+            config.cyber_access_program = Some(CyberAccessProgramPreference::DaybreakBlue);
         })
         .build_with_auto_env(&server)
         .await?;
@@ -192,6 +193,55 @@ async fn configured_program_applies_to_new_turns_but_explicit_selection_wins() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cyber_access_program_follows_model_switches_and_exact_overrides() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.cyber_access_program = Some(CyberAccessProgramPreference::DaybreakRed);
+            config.cyber_access_program_by_model.extend([
+                ("gpt-5.4".to_string(), CyberAccessProgramPreference::Auto),
+                (
+                    "gpt-5.1".to_string(),
+                    CyberAccessProgramPreference::DaybreakBlue,
+                ),
+            ]);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    for (model, program, expected) in [
+        ("gpt-5.4", None, json!(null)),
+        ("gpt-5.1", None, json!({"cyber": "daybreak_blue"})),
+        (
+            "gpt-5.4",
+            Some(CyberAccessProgram::Standard),
+            json!({"cyber": "standard"}),
+        ),
+        ("gpt-5.4-other", None, json!({"cyber": "daybreak_red"})),
+        ("gpt-5.4", None, json!(null)),
+    ] {
+        core_test_support::submit_thread_settings(
+            &test.codex,
+            codex_protocol::protocol::ThreadSettingsOverrides {
+                model: Some(model.to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let request =
+            responses::mount_sse_once(&server, responses::sse_completed("model-selection")).await;
+        submit(&test, program).await?;
+        let body = request.single_request().body_json();
+        assert_eq!(
+            (body["model"].clone(), body["access_programs"].clone()),
+            (json!(model), expected)
+        );
+    }
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cyber_access_program_omits_api_key_and_spoofed_custom_provider() -> Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
     for (auth, provider_id) in [
@@ -209,7 +259,7 @@ async fn cyber_access_program_omits_api_key_and_spoofed_custom_provider() -> Res
             .with_config(move |config| {
                 // Keep the display name "OpenAI": provider identity must not use it.
                 config.model_provider_id = provider_id.to_owned();
-                config.cyber_access_program = Some(CyberAccessProgram::DaybreakBlue);
+                config.cyber_access_program = Some(CyberAccessProgramPreference::DaybreakBlue);
             })
             .build_with_auto_env(&server)
             .await?;
@@ -282,8 +332,11 @@ async fn cyber_access_program_survives_mid_turn_remote_compaction_v2() -> Result
     Ok(())
 }
 
+#[test_case::test_case("inherit"; "inherit_without_configuration")]
+#[test_case::test_case("model"; "child_model_auto_overrides_inheritance")]
+#[test_case::test_case("role"; "child_role_auto_overrides_inheritance")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cyber_access_program_is_inherited_by_child_turns() -> Result<()> {
+async fn cyber_access_program_is_inherited_by_child_turns(child_selection: &str) -> Result<()> {
     // Final answers defer late child completion mail to the next parent turn.
     let final_response = |id: &str| {
         responses::sse(vec![
@@ -298,11 +351,21 @@ async fn cyber_access_program_is_inherited_by_child_turns() -> Result<()> {
         ("multi_agent_v1", "none"),
     ] {
         let is_v2 = namespace == "collaboration";
-        let spawn_arguments = if is_v2 {
+        let child_model_auto = child_selection == "model";
+        let child_role_auto = child_selection == "role";
+        let child_auto = child_model_auto || child_role_auto;
+        if child_role_auto && fork_turns == "all" {
+            // Full-context forks cannot change the parent's agent role.
+            continue;
+        }
+        let mut spawn_arguments = if is_v2 {
             json!({"message": "inspect the repository", "task_name": "worker", "fork_turns": fork_turns})
         } else {
             json!({"message": "inspect the repository"})
         };
+        if child_role_auto {
+            spawn_arguments["agent_type"] = json!("auto_worker");
+        }
         let server = responses::start_mock_server().await;
         // V1 completion notifications can require another parent response.
         Mock::given(method("POST"))
@@ -335,6 +398,25 @@ async fn cyber_access_program_is_inherited_by_child_turns() -> Result<()> {
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_model(if is_v2 { "gpt-5.6-sol" } else { "gpt-5.1" })
             .with_config(move |config| {
+                if child_role_auto {
+                    let role_path = config.codex_home.join("auto-worker.toml");
+                    std::fs::write(&role_path, "cyber_access_program = \"auto\"\n")
+                        .expect("write role");
+                    config.agent_roles.insert(
+                        "auto_worker".to_string(),
+                        codex_core::config::AgentRoleConfig {
+                            description: None,
+                            config_file: Some(role_path),
+                            nickname_candidates: None,
+                        },
+                    );
+                }
+                if child_model_auto {
+                    config.cyber_access_program_by_model.insert(
+                        if is_v2 { "gpt-5.6-sol" } else { "gpt-5.1" }.to_string(),
+                        CyberAccessProgramPreference::Auto,
+                    );
+                }
                 config
                     .features
                     .enable(Feature::Collab)
@@ -366,7 +448,11 @@ async fn cyber_access_program_is_inherited_by_child_turns() -> Result<()> {
         };
         assert_eq!(
             child_programs(&initial_child_request),
-            vec![json!({"cyber": "daybreak_red"})],
+            vec![if child_auto {
+                json!(null)
+            } else {
+                json!({"cyber": "daybreak_red"})
+            }],
             "namespace={namespace}, fork_turns={fork_turns}"
         );
 
@@ -430,7 +516,7 @@ async fn cyber_access_program_is_inherited_by_child_turns() -> Result<()> {
             wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
             assert_eq!(
                 child_programs(&followup_child_request),
-                vec![expected],
+                vec![if child_auto { json!(null) } else { expected }],
                 "namespace={namespace}, fork_turns={fork_turns}, reload={reload}"
             );
         }

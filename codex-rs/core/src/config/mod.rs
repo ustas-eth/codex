@@ -15,6 +15,7 @@ use codex_config::ConfigPathContext;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
+use codex_config::CyberAccessProgramPreference;
 use codex_config::FeatureRequirementsToml;
 use codex_config::ManagedAuthPolicy;
 use codex_config::McpEnterpriseManagedAuthConfig;
@@ -127,7 +128,6 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::turn_input::CyberAccessProgram;
 use codex_rmcp_client::McpOAuthRefreshMode;
 use codex_sandboxing::SandboxType;
 pub use codex_thread_store::ExtraConfig;
@@ -622,7 +622,9 @@ pub struct Config {
     pub model: Option<String>,
 
     /// Default program for new native OpenAI turns; sent only with ChatGPT auth.
-    pub cyber_access_program: Option<CyberAccessProgram>,
+    pub cyber_access_program: Option<CyberAccessProgramPreference>,
+    /// Exact model-id overrides, resolved using the model selected for each turn.
+    pub cyber_access_program_by_model: BTreeMap<String, CyberAccessProgramPreference>,
 
     /// Effective service tier request id preference for new turns.
     /// `default` means the user explicitly selected standard routing.
@@ -4242,6 +4244,7 @@ impl Config {
             prefer_mxc,
             model,
             cyber_access_program: cfg.cyber_access_program,
+            cyber_access_program_by_model: cfg.cyber_access_program_by_model,
             service_tier,
             review_model,
             model_context_window: cfg.model_context_window,

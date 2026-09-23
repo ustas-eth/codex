@@ -30,15 +30,35 @@ the choice unset. Ephemeral threads cannot save it.
 Use `thread/metadata/update` for later changes. This preference does not select
 `turn/start.cyberAccessProgram` or grant access to an access program.
 
-For a default on new native OpenAI, ChatGPT-authenticated turns, set
-`cyber_access_program = "daybreak_blue"` in the server's Codex configuration.
-The accepted values are `standard`, `daybreak_blue`, and `daybreak_red`.
-Explicit `turn/start.cyberAccessProgram` values take precedence, including
-`standard`. When both are omitted, existing automatic behavior is preserved.
-The default also applies to automatic goal continuations, but does not change
-an active turn. This selects a requested program; backend entitlement and
-model-compatibility checks still apply, and failures do not trigger a fallback
-to another program. API-key and custom-provider requests are unchanged.
+Configure defaults for native OpenAI, ChatGPT-authenticated turns in the server's
+Codex config, a named `~/.codex/<name>.config.toml` profile, or an agent role file:
+
+```toml
+cyber_access_program = "auto"
+
+[cyber_access_program_by_model]
+"gpt-6-sol" = "daybreak_blue"
+"gpt-6-astra" = "auto"
+```
+
+Values are `auto`, `standard`, `daybreak_blue`, and `daybreak_red`. `auto` omits
+the request field; `standard` explicitly requests standard treatment. Model keys
+match the selected model id exactly, without prefix or wildcard matching.
+Configuration layers merge first, then each new turn selects its program in this
+order: explicit `turn/start.cyberAccessProgram`, exact-model config, global config,
+inherited parent program, backend automatic behavior. A profile or role can
+override individual model entries with `auto`; changing only the global default
+does not erase inherited model entries. A child's own configuration takes
+precedence over its parent's program, including for follow-up messages.
+
+Defaults are evaluated again for each new turn, including automatic goal
+continuations and turns after a model switch. They do not change an active turn;
+remote compaction uses that turn's selection. Interrupted-turn recovery retains
+an explicitly persisted program rather than reselecting it from defaults.
+Backend entitlement and model-compatibility checks still apply, and failures do
+not trigger a fallback to another program. API-key and custom-provider requests
+are unchanged. A remote TUI must connect to an app server running this support;
+client-side launch overrides do not reconfigure an already-running remote server.
 
 # Application network policy
 

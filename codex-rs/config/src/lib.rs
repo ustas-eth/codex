@@ -11,6 +11,7 @@ mod config_layer_source;
 mod config_requirements;
 pub mod config_toml;
 mod constraint;
+mod cyber_access_program;
 mod diagnostics;
 mod filesystem_constraints;
 mod fingerprint;
@@ -48,6 +49,8 @@ mod tui_rendering;
 pub mod types;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+
+pub use cyber_access_program::CyberAccessProgramPreference;
 
 pub use application_requirements::ApplicationNetworkRequirementsToml;
 pub use application_requirements::ApplicationRequirementsToml;

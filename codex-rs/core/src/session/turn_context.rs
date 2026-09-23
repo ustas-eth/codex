@@ -297,6 +297,7 @@ impl std::fmt::Debug for TurnEnvironment {
 pub(crate) struct NewTurnContextOptions {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) cyber_access_program: Option<CyberAccessProgram>,
+    pub(crate) inherited_cyber_access_program: Option<CyberAccessProgram>,
 }
 
 /// The context needed for a single turn of the thread.
@@ -1273,9 +1274,27 @@ impl Session {
 
         turn_context.final_output_json_schema = options.final_output_json_schema;
         if turn_context.config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID {
-            turn_context.cyber_access_program = options
-                .cyber_access_program
+            use codex_config::CyberAccessProgramPreference;
+            let preference = turn_context
+                .config
+                .cyber_access_program_by_model
+                .get(&turn_context.model_info().slug)
+                .copied()
                 .or(turn_context.config.cyber_access_program);
+            turn_context.cyber_access_program =
+                options.cyber_access_program.or_else(|| match preference {
+                    Some(CyberAccessProgramPreference::Auto) => None,
+                    Some(CyberAccessProgramPreference::Standard) => {
+                        Some(CyberAccessProgram::Standard)
+                    }
+                    Some(CyberAccessProgramPreference::DaybreakBlue) => {
+                        Some(CyberAccessProgram::DaybreakBlue)
+                    }
+                    Some(CyberAccessProgramPreference::DaybreakRed) => {
+                        Some(CyberAccessProgram::DaybreakRed)
+                    }
+                    None => options.inherited_cyber_access_program,
+                });
         }
         let turn_context = Arc::new(turn_context);
         if git_enrichment_policy == GitEnrichmentPolicy::Fresh

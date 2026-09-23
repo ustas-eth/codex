@@ -59,6 +59,74 @@ async fn apply_role_defaults_to_default_and_leaves_config_unchanged() {
 }
 
 #[tokio::test]
+async fn cyber_access_program_role_overrides_preserve_other_model_choices() {
+    let (home, mut config) = test_config_with_cli_overrides(vec![
+        (
+            "cyber_access_program".to_string(),
+            TomlValue::String("daybreak_blue".to_string()),
+        ),
+        (
+            "cyber_access_program_by_model".to_string(),
+            toml::from_str(r#""gpt-6-sol" = "daybreak_blue""#).expect("model settings"),
+        ),
+    ])
+    .await;
+    let role_path = write_role_config(
+        &home,
+        "worker.toml",
+        r#"
+cyber_access_program = "auto"
+[cyber_access_program_by_model]
+"gpt-6-astra" = "auto"
+"#,
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+    apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect("apply role");
+    let expected = (
+        Some(CyberAccessProgramPreference::Auto),
+        BTreeMap::from([
+            (
+                "gpt-6-astra".to_string(),
+                CyberAccessProgramPreference::Auto,
+            ),
+            (
+                "gpt-6-sol".to_string(),
+                CyberAccessProgramPreference::DaybreakBlue,
+            ),
+        ]),
+    );
+    let layered: codex_config::config_toml::ConfigToml = config
+        .config_layer_stack
+        .effective_config()
+        .try_into()
+        .expect("typed effective config");
+    assert_eq!(
+        (
+            config.cyber_access_program,
+            config.cyber_access_program_by_model
+        ),
+        expected
+    );
+    assert_eq!(
+        (
+            layered.cyber_access_program,
+            layered.cyber_access_program_by_model
+        ),
+        expected
+    );
+}
+
+#[tokio::test]
 async fn apply_role_returns_error_for_unknown_role() {
     let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
 

@@ -173,9 +173,11 @@ pub struct TurnStartOptions {
     pub parent_turn_id: Option<String>,
     /// Causal root turn lineage recorded if this request starts a new turn.
     pub root_turn_id: Option<String>,
-    /// Explicit cyber treatment for this turn. Omission preserves the backend's
-    /// automatic behavior.
+    /// Explicit cyber treatment for this turn, overriding configured defaults.
     pub cyber_access_program: Option<CyberAccessProgram>,
+    /// Parent treatment used only when this turn has no explicit or configured
+    /// selection. Child model and role preferences take precedence.
+    pub inherited_cyber_access_program: Option<CyberAccessProgram>,
 }
 
 /// What Core did with input submitted through `start_or_steer_turn`.

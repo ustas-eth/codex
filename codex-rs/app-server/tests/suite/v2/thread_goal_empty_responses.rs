@@ -22,8 +22,13 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
+#[test_case::test_case("", json!({"cyber": "daybreak_blue"}); "global_default")]
+#[test_case::test_case("[cyber_access_program_by_model]\n\"gpt-5.4\" = \"auto\"\n", json!(null); "model_auto_override")]
 #[tokio::test]
-async fn goal_continuations_use_configured_cyber_access_program() -> Result<()> {
+async fn goal_continuations_use_configured_cyber_access_program(
+    model_config: &str,
+    expected: serde_json::Value,
+) -> Result<()> {
     let server = responses::start_mock_server().await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/v1/responses"))
@@ -46,7 +51,7 @@ async fn goal_continuations_use_configured_cyber_access_program() -> Result<()> 
     std::fs::write(
         home.path().join("config.toml"),
         format!(
-            "model = \"gpt-5.4\"\napproval_policy = \"never\"\nopenai_base_url = \"{}/v1\"\ncyber_access_program = \"daybreak_blue\"\ncli_auth_credentials_store = \"file\"\n[features]\ngoals = true\n",
+            "model = \"gpt-5.4\"\napproval_policy = \"never\"\nopenai_base_url = \"{}/v1\"\ncyber_access_program = \"daybreak_blue\"\ncli_auth_credentials_store = \"file\"\n[features]\ngoals = true\n{model_config}",
             server.uri()
         ),
     )?;
@@ -87,7 +92,7 @@ async fn goal_continuations_use_configured_cyber_access_program() -> Result<()> 
             .iter()
             .map(|request| request.body_json()["access_programs"].clone())
             .collect::<Vec<_>>(),
-        vec![json!({"cyber": "daybreak_blue"}); 3]
+        vec![expected; 3]
     );
     Ok(())
 }

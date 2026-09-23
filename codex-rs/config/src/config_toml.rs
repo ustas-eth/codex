@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::path::Path;
 
+use crate::CyberAccessProgramPreference;
 use crate::HooksToml;
 use crate::browser_use::BrowserUseConfigToml;
 use crate::computer_use::ComputerUseConfigToml;
@@ -54,7 +55,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::turn_input::CyberAccessProgram;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::normalize_for_path_comparison;
 use codex_utils_path_uri::Platform;
@@ -170,7 +170,11 @@ pub struct ConfigToml {
     /// Default cyber access program for new native OpenAI, ChatGPT-authenticated
     /// turns. An explicit turn selection takes precedence. Omission preserves
     /// automatic behavior; entitlement and model restrictions remain server-owned.
-    pub cyber_access_program: Option<CyberAccessProgram>,
+    pub cyber_access_program: Option<CyberAccessProgramPreference>,
+    /// Exact model-id overrides for the default cyber access program. `auto`
+    /// leaves selection to the backend, including when a global default is set.
+    #[serde(default)]
+    pub cyber_access_program_by_model: BTreeMap<String, CyberAccessProgramPreference>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
 
@@ -1038,16 +1042,20 @@ mod tests {
         for (input, expected) in [
             ("", None),
             (
+                r#"cyber_access_program = "auto""#,
+                Some(CyberAccessProgramPreference::Auto),
+            ),
+            (
                 r#"cyber_access_program = "standard""#,
-                Some(CyberAccessProgram::Standard),
+                Some(CyberAccessProgramPreference::Standard),
             ),
             (
                 r#"cyber_access_program = "daybreak_blue""#,
-                Some(CyberAccessProgram::DaybreakBlue),
+                Some(CyberAccessProgramPreference::DaybreakBlue),
             ),
             (
                 r#"cyber_access_program = "daybreak_red""#,
-                Some(CyberAccessProgram::DaybreakRed),
+                Some(CyberAccessProgramPreference::DaybreakRed),
             ),
         ] {
             let config: ConfigToml = toml::from_str(input).expect("valid access program");
