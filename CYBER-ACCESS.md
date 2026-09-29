@@ -7,7 +7,7 @@ goal continuations, and native subagents.
 Access still depends on your account entitlement and the selected model. These
 settings apply to the native OpenAI provider with ChatGPT authentication.
 
-Based on Codex 0.159.0. Upstream now preserves the model and access-program pair
+Based on Codex 0.159.1. Upstream now preserves the model and access-program pair
 during compaction after a model switch; this branch still supplies the
 configuration defaults described below.
 
@@ -53,10 +53,10 @@ cd codex-cyber
 The branch sets `[workspace.package].version` in `codex-rs/Cargo.toml` to:
 
 ```toml
-version = "0.159.0+cyber.1"
+version = "0.159.1+cyber.1"
 ```
 
-This identifies the patched build based on upstream tag `rust-v0.159.0`.
+This identifies the patched build based on upstream tag `rust-v0.159.1`.
 Codex sends its compiled version to the backend; leaving it at
 `0.0.0` can cause compatible models to be rejected with a misleading
 ChatGPT-account error. Setting only the package builder's `--package-version`
@@ -91,7 +91,7 @@ Run the package directly:
 ./codex-cyber-package/bin/codex
 ```
 
-The reported version should be `0.159.0+cyber.1`. You can move the complete
+The reported version should be `0.159.1+cyber.1`. You can move the complete
 package directory to a permanent location and put a symlink to its `bin/codex`
 on your PATH under a distinct name such as `codex-cyber`.
 
