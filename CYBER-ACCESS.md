@@ -116,7 +116,7 @@ Run the focused tests when updating the upstream base:
 ```bash
 just test -p codex-core --lib -E 'test(cyber_access_program)'
 just test -p codex-core -p codex-app-server --test all \
-  -E 'test(cyber_access_program) | test(compact_program_tests)'
+  -E 'test(cyber_access_program) | test(model_switch_program_pair)'
 ```
 
 After installing, verify a real tool call as well as model selection. A
