@@ -1372,7 +1372,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
     .await;
 
     let codex_home = Arc::new(TempDir::new().unwrap());
-    let mut builder = test_codex().with_model("gpt-5.4");
+    let mut builder = test_codex().with_model("gpt-5.5");
     let test = builder
         .resume(&server, codex_home, session_path.clone())
         .await
@@ -1658,6 +1658,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        include_internal_metadata: false,
     };
 
     send_request_with_provider(provider).await;
@@ -1712,6 +1713,7 @@ async fn send_request_with_provider(provider: ModelProviderInfo) {
         /*attestation_provider*/ None,
         config.http_client_factory(),
         config.workspace_routing_context(),
+        Vec::new(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
     let mut client_session = client.new_session();
@@ -3175,6 +3177,7 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        include_internal_metadata: false,
     };
 
     let codex_home = TempDir::new().unwrap();
@@ -3221,6 +3224,7 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
         /*attestation_provider*/ None,
         config.http_client_factory(),
         config.workspace_routing_context(),
+        Vec::new(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
     let mut client_session = client.new_session();
@@ -3811,6 +3815,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        include_internal_metadata: false,
     };
 
     // Init session
@@ -3897,6 +3902,7 @@ async fn env_var_overrides_loaded_auth() {
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        include_internal_metadata: false,
     };
 
     // Init session

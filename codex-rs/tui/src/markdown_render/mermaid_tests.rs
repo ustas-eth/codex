@@ -21,6 +21,7 @@ fn mermaid_fences_use_native_renderer_for_every_family() {
     for source in [
         "%% heading\nflowchart TD; A --> B",
         "graph LR; A --> B",
+        "flowchart; A -- send --> B & C; B <-.-> C",
         "sequenceDiagram; A->>B: request; B-->>A: response",
         "stateDiagram-v2; [*] --> Active; Active --> [*]",
         "stateDiagram; [*] --> Active; Active --> [*]",
@@ -39,6 +40,27 @@ fn mermaid_fences_use_native_renderer_for_every_family() {
 fn mermaid_nested_fences_and_unicode() {
     let source = "> ~~~~mermaid\n> flowchart TD\n>     A[请求] --> B[Réponse]\n> ~~~~~\n\n- Diagram:\n\n  ```mermaid\n  flowchart LR\n      A --> B\n  ```\n";
     assert_snapshot!(markdown_text(source, /*width*/ 60));
+}
+
+#[test]
+fn mermaid_quoted_labels_and_ampersands() {
+    let source = r#"```mermaid
+flowchart LR
+    A["Your saved order"] --> B["Review & confirm"] --> C["DoorDash checkout"]
+```"#;
+    let output = markdown_text(source, /*width*/ 100);
+    assert!(output.starts_with('┌'));
+    assert_snapshot!(output);
+}
+
+#[test]
+fn mermaid_entities_keep_source() {
+    let source = "```mermaid\nsequenceDiagram\nA->>B: &amp;\n```";
+    let output = markdown_text(source, /*width*/ 100);
+    assert!(output.ends_with(&markdown_text(
+        &source.replacen("mermaid", "unknown", /*count*/ 1),
+        /*width*/ 100,
+    )));
 }
 
 #[test]
@@ -91,6 +113,16 @@ fn mermaid_fallback_notices_preserve_source() {
     for (name, source, width) in [
         ("invalid", "```mermaid\nflowchart LR\nA[unfinished\n```", 80),
         ("unsupported", "```mermaid\npie\n\"Cats\": 2\n```", 80),
+        (
+            "unsupported shape after supported edges",
+            "```mermaid\nflowchart TD\nP --> Q\nA[(Database)]\n```",
+            80,
+        ),
+        (
+            "Markdown string after supported edges",
+            "```mermaid\nflowchart TD\nP --> Q\nA[\"`hello **world**`\"]\n```",
+            80,
+        ),
         (
             "too wide",
             "```mermaid\nflowchart LR\nA[Request] --> B[Reply]\n```",

@@ -35,7 +35,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
@@ -178,7 +177,7 @@ pub struct GuardianReviewSessionReuseKey {
     // history rewrites that invalidate existing reviewer context.
     parent_history_version: u64,
     parent_reset_version: u64,
-    root_authorization_version: Option<crate::codex_thread::GuardianAuthorizationVersion>,
+    root_review_version: Option<(crate::codex_thread::GuardianAuthorizationVersion, u64)>,
     node_repl_auto_review_required: bool,
     node_repl_policy: String,
     model: Option<String>,
@@ -213,13 +212,13 @@ impl GuardianReviewSessionReuseKey {
         context_mode: GuardianContextMode,
     ) -> Self {
         Self {
-            root_authorization_version: None,
+            root_review_version: None,
             parent_reset_version: 0,
             parent_history_version: match ReviewContextPolicy::for_context(
                 context_mode,
                 &spawn_config.features,
             ) {
-                ReviewContextPolicy::Legacy => 0,
+                ReviewContextPolicy::Legacy | ReviewContextPolicy::Independent => 0,
                 ReviewContextPolicy::LegacyWithCheckpointReuse
                 | ReviewContextPolicy::ThreadOwned => parent_history_version,
             },
@@ -286,21 +285,28 @@ pub(crate) fn prompt_cache_key_override_for_review_session(
 
 impl GuardianReviewSession {
     async fn admit_node_repl_evidence(&self, event: &Event) {
-        let EventMsg::ItemCompleted(completed) = &event.msg else {
+        // Annotated review inputs are recorded as response items without UI turn
+        // items. Both input paths emit this event after history admission.
+        let EventMsg::RawResponseItem(recorded) = &event.msg else {
             return;
         };
-        let TurnItem::UserMessage(_) = &completed.item else {
+        let ResponseItem::Message { role, content, .. } = &recorded.item else {
             return;
         };
+        if role != "user"
+            || !content.iter().any(|item| {
+                matches!(item, ContentItem::InputText { text }
+                    if text == GUARDIAN_TRANSCRIPT_START || text == ">>> TRANSCRIPT DELTA START\n")
+            })
+        {
+            return;
+        }
 
         let mut state = self.state.lock().await;
         let Some(pending) = state.pending_node_repl_evidence_admission.as_ref() else {
             return;
         };
-        if completed.thread_id == self.session.thread_id()
-            && event.id == pending.turn_id
-            && completed.turn_id == pending.turn_id
-        {
+        if event.id == pending.turn_id {
             state.last_admitted_node_repl_response_sequence = state
                 .last_admitted_node_repl_response_sequence
                 .max(pending.response_sequence);
@@ -485,7 +491,7 @@ async fn run_review_on_session(
 
             let parent_history = params.parent_history.conversation_history_snapshot();
             let history = if GuardianContextMode::from_history(parent_history.as_ref())
-                == GuardianContextMode::ThreadOwned
+                != GuardianContextMode::Legacy
             {
                 parent_history
             } else {

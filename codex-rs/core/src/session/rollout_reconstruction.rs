@@ -1,5 +1,4 @@
 use super::*;
-use crate::context::GuardianContextMode;
 use crate::context::world_state::WorldStateSnapshot;
 use crate::context_manager::is_user_turn_boundary;
 use codex_history::ResponseItemEnvelope;
@@ -304,6 +303,7 @@ impl Session {
                     ) {
                         active_segment.previous_turn_settings = Some(PreviousTurnSettings {
                             model: ctx.model.clone(),
+                            cyber_access_program: ctx.cyber_access_program,
                             comp_hash: ctx.comp_hash.clone(),
                             realtime_active: ctx.realtime_active,
                         });
@@ -393,9 +393,9 @@ impl Session {
         .unwrap_or(u64::MAX);
 
         // Build model-visible history from the selected compaction and its newer suffix.
-        let mut history = ContextManager::with_guardian_context_mode(
-            self.guardian_context_mode,
+        let mut history = ContextManager::for_session(
             &turn_context.session_source,
+            &turn_context.config.features,
         );
         let mut saw_legacy_compaction_without_replacement_history = false;
         if let Some(checkpoint) = history_checkpoint
@@ -418,8 +418,8 @@ impl Session {
                     history.record_retained_context(event);
                 }
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_annotated_items(
-                        std::slice::from_ref(response_item),
+                    history.replay_annotated_item(
+                        response_item,
                         turn_context.model_info().truncation_policy.into(),
                     );
                 }
@@ -445,16 +445,8 @@ impl Session {
                         // prompt shape.
                         // TODO(ccunningham): if we drop support for None replacement_history compaction items,
                         // we can get rid of this second loop entirely and just build `history` directly in the first loop.
-                        let identity =
-                            if self.guardian_context_mode == GuardianContextMode::ThreadOwned {
-                                compact::CompactedMessageIdentity::Preserve
-                            } else {
-                                compact::CompactedMessageIdentity::Regenerate
-                            };
-                        let user_messages = compact::collect_annotated_user_messages(
-                            history.annotated_items(),
-                            identity,
-                        );
+                        let user_messages =
+                            compact::collect_annotated_user_messages(history.annotated_items());
                         let rebuilt = compact::build_compacted_history(
                             Vec::new(),
                             &user_messages,

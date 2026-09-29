@@ -45,6 +45,7 @@ use crate::environment::EnvironmentConnectionState;
 use crate::process::ExecProcessEvent;
 use crate::process::ExecProcessEventLog;
 use crate::process::ExecProcessEventReceiver;
+use crate::process_telemetry::trace_process_id;
 use crate::protocol::CAPABILITY_ROOTS_DISCOVER_METHOD;
 use crate::protocol::CapabilityRootsDiscoverParams;
 use crate::protocol::CapabilityRootsDiscoverResponse;
@@ -149,7 +150,6 @@ mod recovery;
 #[path = "client_refresh.rs"]
 mod refresh;
 pub(crate) use connection_failure::can_retry_connection_attempt;
-#[cfg(test)]
 pub(crate) use recovery::is_environment_offline_error;
 pub(crate) use recovery::is_retryable_recovery_error;
 
@@ -1026,6 +1026,11 @@ impl ExecServerClient {
             .await
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.process_start",
+        skip_all,
+        fields(process.id = trace_process_id(params.process_id.as_str())),
+    )]
     pub(crate) async fn start_process(
         &self,
         params: ExecParams,

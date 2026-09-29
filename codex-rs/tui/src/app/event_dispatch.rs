@@ -41,11 +41,14 @@ impl App {
                 AppEvent::OpenDaemonMenu
                     | AppEvent::OpenWarnings
                     | AppEvent::CopyWarning(_)
+                    | AppEvent::UpdateWarnings { .. }
+                    | AppEvent::CopySelection { .. }
                     | AppEvent::ConfirmDaemonUpdate(_)
                     | AppEvent::RunDaemonUpdate(_)
                     | AppEvent::InsertHistoryCell(_)
                     | AppEvent::CommitRealtimeTranscriptHistory
                     | AppEvent::ResetTranscriptForThreadSwitch
+                    | AppEvent::ResetTranscriptForThreadSwitchPreservingScreen
                     | AppEvent::FinishPromptRevert { .. }
                     | AppEvent::ManagedWorktreeCreated(_)
                     | AppEvent::AgentsOverviewWorktreeCreated(_)
@@ -102,6 +105,21 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
 
+        // Keep the picker check and model update in one event without recursively polling this
+        // large dispatcher on the TUI thread's stack.
+        let (event, sparkle_model) = match event {
+            AppEvent::AstraSelectedFromModelPicker {
+                thread_id,
+                model,
+                action,
+            } => {
+                let should_offer = self.chat_widget.current_model() != model
+                    && self.chat_widget.sparkle_thread_for_picker_action(&model) == Some(thread_id);
+                let next_event = action.into_app_event(model.clone());
+                (next_event, should_offer.then_some(model))
+            }
+            event => (event, None),
+        };
         match event {
             AppEvent::OpenDaemonMenu => self.open_daemon_menu(),
             AppEvent::ConfirmDaemonUpdate(source) => self.confirm_daemon_update(source),
@@ -131,7 +149,7 @@ impl App {
             AppEvent::PluginMentionsLoaded { ref cwd, .. }
                 if cwds_differ(cwd, self.config.cwd.as_path()) => {}
             AppEvent::NewSession { name } => {
-                self.start_fresh_session_with_summary_hint(
+                self.start_fresh_session(
                     tui, app_server, /*session_start_source*/ None,
                     /*initial_user_message*/ None, name,
                 )
@@ -328,14 +346,29 @@ impl App {
                 }
             }
             AppEvent::OpenWarnings => self.chat_widget.open_warnings(&self.transcript_cells),
+            AppEvent::UpdateWarnings { transcript, dismissed, kept } => {
+                if !Arc::ptr_eq(&transcript, &self.chat_widget.warning_display_state.transcript) {
+                    return Ok(AppRunControl::Continue);
+                }
+                let state = &mut self.chat_widget.warning_display_state.dismissed;
+                state.extend(dismissed.into_iter().map(|entry| (entry.id, entry.details)));
+                for entry in kept {
+                    if state.get(&entry.id) == Some(&entry.details) {
+                        state.remove(&entry.id);
+                    }
+                }
+                self.chat_widget.warning_display_state.synced_cells = None;
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::CopyWarning(text) => {
-                let _ = self.chat_widget.copy_transcript_selection(&text);
+                let result = tui.copy_transcript_selection(&text, crate::clipboard_copy::CopyFormat::PlainText);
+                self.chat_widget.show_selection_copy_result(result);
             }
             AppEvent::OpenTranscriptExportFilePrompt => {
                 self.chat_widget.show_transcript_export_file_prompt();
             }
             AppEvent::ExportTranscript { destination } => {
-                if let Err(error) = self.export_transcript(app_server, destination).await {
+                if let Err(error) = self.export_transcript(tui, app_server, destination).await {
                     self.chat_widget
                         .add_error_message(format!("Export failed: {error}"));
                 }
@@ -346,7 +379,8 @@ impl App {
                 }
             }
             AppEvent::CopySelection { text, label, format } => {
-                self.chat_widget.copy_selection(text, label, format);
+                let result = tui.clipboard.copy(text, format, tui.frame_requester());
+                self.chat_widget.show_copy_result(&label, result);
             }
             AppEvent::ClearUi { name } => {
                 if self.reject_pending_permission_root_switch() {
@@ -355,7 +389,7 @@ impl App {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
-                self.start_fresh_session_with_summary_hint(
+                self.start_fresh_session(
                     tui,
                     app_server,
                     Some(ThreadStartSource::Clear),
@@ -375,7 +409,7 @@ impl App {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
-                self.start_fresh_session_with_summary_hint(
+                self.start_fresh_session(
                     tui,
                     app_server,
                     Some(ThreadStartSource::Clear),
@@ -780,6 +814,12 @@ impl App {
                 self.reset_for_thread_switch(tui)?;
                 self.pending_thread_switch_resets -= 1;
             }
+            AppEvent::ResetTranscriptForThreadSwitchPreservingScreen => {
+                self.reset_transcript_state_after_clear();
+                tui.clear_pending_history_lines();
+                tui.defer_thread_switch_clear();
+                self.pending_thread_switch_resets -= 1;
+            }
             AppEvent::CommitRealtimeTranscriptHistory => {
                 for cell in self.chat_widget.take_realtime_transcript_history() {
                     self.insert_history_cell(tui, cell);
@@ -791,6 +831,10 @@ impl App {
             }
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);
+            }
+            AppEvent::TurnTipReady { thread_id, turn_id } => {
+                self.turn_tips.ready(thread_id, &turn_id, self.transcript_cells.last());
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.scrollback_has_older_history = self
@@ -1904,22 +1948,7 @@ impl App {
                         .await;
                 }
             }
-            AppEvent::AstraSelectedFromModelPicker { thread_id, model, action } => {
-                // Check and apply in the same event so a queued backend update cannot turn a
-                // no-op picker confirmation into a sparkle.
-                let should_offer = self.chat_widget.current_model() != model
-                    && self.chat_widget.sparkle_thread_for_picker_action(&model) == Some(thread_id);
-                let control = Box::pin(self.handle_event(
-                    tui,
-                    app_server,
-                    action.into_app_event(model.clone()),
-                ))
-                .await?;
-                if should_offer {
-                    self.chat_widget.on_sparkle_model_selected_from_picker(&model);
-                }
-                return Ok(control);
-            }
+            AppEvent::AstraSelectedFromModelPicker { .. } => unreachable!("picker event unwrapped"),
             AppEvent::BackgroundVoiceError { thread_id, message } => {
                 if self.chat_widget.thread_id() == Some(thread_id) {
                     self.chat_widget.add_error_message(message);
@@ -3171,6 +3200,10 @@ impl App {
                     self.insert_history_cell(tui, Box::new(cell));
                 }
             }
+        }
+        if let Some(model) = sparkle_model {
+            self.chat_widget
+                .on_sparkle_model_selected_from_picker(&model);
         }
         Ok(AppRunControl::Continue)
     }

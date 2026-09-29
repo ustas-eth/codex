@@ -282,6 +282,8 @@ pub(crate) struct BottomPane {
     /// Stack of views displayed instead of the composer (e.g. popups/modals).
     view_stack: Vec<Box<dyn BottomPaneView>>,
     warnings_view: Option<warnings_view::WarningsView>,
+    /// A keep press can close the viewer; its remaining repeats must not edit the draft.
+    pub(crate) suppress_warning_keep_repeat: bool,
     pub(crate) questions: Option<Box<AsyncQuestions>>,
     delayed_approval_requests: VecDeque<DelayedApprovalRequest>,
     last_composer_activity_at: Option<Instant>,
@@ -368,6 +370,7 @@ impl BottomPane {
             composer,
             view_stack: Vec::new(),
             warnings_view: None,
+            suppress_warning_keep_repeat: false,
             questions: None,
             delayed_approval_requests: VecDeque::new(),
             last_composer_activity_at: None,
@@ -443,6 +446,32 @@ impl BottomPane {
     pub(crate) fn set_agents_navigation_enabled(&mut self, enabled: bool) {
         self.composer.set_agents_navigation_enabled(enabled);
         self.request_redraw();
+    }
+
+    pub(crate) fn agents_navigation_key_available(&self) -> bool {
+        let left = KeyEvent::from(KeyCode::Left);
+        self.composer.agents_navigation_key_available()
+            && !crate::keymap::keymap_action_ids()
+                .filter(|action| {
+                    matches!(
+                        action.context,
+                        KeymapContext::Global | KeymapContext::Chat | KeymapContext::Voice
+                    )
+                })
+                .any(|action| {
+                    crate::keymap::bindings_for_action(
+                        &self.keymap,
+                        action.context.config_name(),
+                        action.action,
+                    )
+                    .is_some_and(|bindings| bindings.is_pressed(left))
+                })
+            && !self.keymap.chords.bindings.iter().any(|binding| {
+                matches!(
+                    binding.action.context,
+                    KeymapContext::Global | KeymapContext::Chat | KeymapContext::Voice
+                ) && binding.chord.prefix.is_press(left)
+            })
     }
 
     pub(crate) fn set_task_mentions_enabled(&mut self, enabled: bool) {
@@ -792,8 +821,11 @@ impl BottomPane {
                 .warnings_view
                 .as_mut()
                 .is_some_and(|view| view.handle_key(key_event))
+                && let Some(view) = self.warnings_view.take()
             {
-                self.warnings_view = None;
+                self.suppress_warning_keep_repeat =
+                    key_hint::plain(KeyCode::Char('k')).is_press(key_event);
+                view.close();
             }
             self.request_redraw();
             return InputResult::None;
@@ -915,7 +947,9 @@ impl BottomPane {
     /// quit/interrupt state machine and uses the result to decide what happens next.
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
         if self.warnings_active() {
-            self.warnings_view = None;
+            if let Some(view) = self.warnings_view.take() {
+                view.close();
+            }
             self.request_redraw();
             return CancellationEvent::Handled;
         }
@@ -1113,9 +1147,8 @@ impl BottomPane {
         self.composer.current_text()
     }
 
-    #[cfg(test)]
     pub(crate) fn composer_cursor(&self) -> usize {
-        self.composer.cursor()
+        self.composer.current_cursor()
     }
 
     #[cfg(test)]
@@ -1745,6 +1778,15 @@ impl BottomPane {
         self.composer.end_mouse_drag();
     }
 
+    pub(crate) fn finish_composer_copy(
+        &mut self,
+        completion: &(u64, crate::clipboard_copy::worker::CopyResult),
+        visible: bool,
+    ) -> Option<usize> {
+        let current = visible && !self.has_active_view();
+        self.composer.finish_copy(completion, current)
+    }
+
     pub(crate) fn copy_composer_selection(
         &mut self,
         event: &crate::tui::TuiEvent,
@@ -1754,6 +1796,10 @@ impl BottomPane {
             return None;
         }
         self.composer.copy_selection(event, copy)
+    }
+
+    pub(crate) fn can_paste_on_right_click(&self) -> bool {
+        self.no_modal_or_popup_active() && self.composer.can_paste_on_right_click()
     }
 
     pub(crate) fn prepare_composer_mouse(&mut self, event: crossterm::event::MouseEvent) -> bool {
@@ -1868,6 +1914,20 @@ impl BottomPane {
         if let Some(tool_suggestion) = request.tool_suggestion()
             && let Some(install_url) = tool_suggestion.install_url.clone()
         {
+            let Some(install_url) = app_link_view::validate_external_url(
+                &install_url,
+                /*require_chatgpt_host*/ false,
+            ) else {
+                self.app_event_tx.resolve_elicitation(
+                    request.thread_id(),
+                    request.server_name().to_string(),
+                    request.request_id().clone(),
+                    codex_app_server_protocol::McpServerElicitationAction::Decline,
+                    /*content*/ None,
+                    /*meta*/ None,
+                );
+                return;
+            };
             let suggestion_type = match tool_suggestion.suggest_type {
                 mcp_server_elicitation::ToolSuggestionType::Install => {
                     AppLinkSuggestionType::Install
@@ -1897,7 +1957,7 @@ impl BottomPane {
                             "external actions use URL mode elicitation, not tool suggestion forms"
                         ),
                     },
-                    url: install_url,
+                    url: install_url.into(),
                     is_installed,
                     is_enabled: false,
                     suggest_reason: Some(tool_suggestion.suggest_reason.clone()),
@@ -2164,6 +2224,12 @@ impl BottomPane {
                 || self.hook_status_message.is_some()
                 || !self.unified_exec_footer.is_empty();
             let has_inline_previews = has_pending_thread_approvals || has_pending_input;
+            if !has_inline_previews
+                && self.status_widget().is_some()
+                && let Some(tip) = options.working_tip
+            {
+                flex.push(/*flex*/ 1, RenderableItem::Borrowed(tip));
+            }
             if has_inline_previews && has_status_or_footer {
                 flex.push(/*flex*/ 0, RenderableItem::Owned("".into()));
             }
@@ -2775,14 +2841,14 @@ mod tests {
         ] {
             let mut pane = test_pane(tx.clone());
             match source {
-                "warning open" => pane.show_warnings(Vec::new()),
+                "warning open" => pane.show_warnings(Vec::new(), Default::default()),
                 "warning navigation" => {
-                    pane.show_warnings(Vec::new());
+                    pane.show_warnings(Vec::new(), Default::default());
                     pane.last_composer_activity_at = None;
                     pane.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
                 }
                 "warning paste" => {
-                    pane.show_warnings(Vec::new());
+                    pane.show_warnings(Vec::new(), Default::default());
                     pane.last_composer_activity_at = None;
                     pane.handle_paste("query".into());
                 }

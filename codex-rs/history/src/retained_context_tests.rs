@@ -18,6 +18,20 @@ fn publish_answer() -> RetainedContextEvent {
     }
 }
 
+fn delivered_message(id: &str, text: &str, acceptance_order: u64) -> RetainedContextEvent {
+    RetainedContextEvent::DeliveredAssistantMessage {
+        message: RetainedUserMessage {
+            origin: crate::UserInputOrigin::User,
+            turn_id: "turn-1".to_owned(),
+            message_id: Some(id.to_owned()),
+            text: text.to_owned(),
+            complete: true,
+            phase: None,
+        },
+        acceptance_order,
+    }
+}
+
 #[test]
 fn retained_evidence_preserves_order_through_recovery_checkpoint_and_rollback() {
     let mut context = RetainedContext::default();
@@ -26,6 +40,8 @@ fn retained_evidence_preserves_order_through_recovery_checkpoint_and_rollback() 
     let before_restriction = context.clone();
     context.record_user_message(
         RetainedUserMessage {
+            phase: None,
+            origin: crate::UserInputOrigin::User,
             turn_id: "revocation-turn".to_owned(),
             message_id: Some("revocation".to_owned()),
             text: String::new(),
@@ -107,7 +123,9 @@ fn retained_families_enforce_storage_limits_without_changing_snapshots() {
 
     let mut restored = snapshot.clone();
     let mut oversized = first.clone();
-    let RetainedContextEvent::VerifiedAnswer { answer, .. } = &mut oversized;
+    let RetainedContextEvent::VerifiedAnswer { answer, .. } = &mut oversized else {
+        panic!("verified answer fixture");
+    };
     answer.questions[0].answer = "a".repeat(MAX_RECORD_BYTES);
     restored.record(&oversized);
     assert!(!restored.verified_answers_complete());
@@ -131,6 +149,8 @@ fn retained_families_enforce_storage_limits_without_changing_snapshots() {
     for index in 0..=MAX_FAMILY_RECORDS {
         restored.record_user_message(
             RetainedUserMessage {
+                phase: None,
+                origin: crate::UserInputOrigin::User,
                 turn_id: "later-turn".to_owned(),
                 message_id: Some(format!("message-{index}")),
                 text: "Keep the repository private.".to_owned(),
@@ -150,6 +170,8 @@ fn retained_families_enforce_storage_limits_without_changing_snapshots() {
     let recent = restored.clone();
     restored.record_user_message(
         RetainedUserMessage {
+            phase: None,
+            origin: crate::UserInputOrigin::User,
             turn_id: "earlier-turn".to_owned(),
             message_id: Some("delayed-message".to_owned()),
             text: "An older queued instruction.".to_owned(),
@@ -163,6 +185,8 @@ fn retained_families_enforce_storage_limits_without_changing_snapshots() {
     );
     restored.record_user_message(
         RetainedUserMessage {
+            phase: None,
+            origin: crate::UserInputOrigin::User,
             turn_id: "oversized-turn".to_owned(),
             message_id: Some("oversized-message".to_owned()),
             text: "restriction ".repeat(MAX_RECORD_BYTES),
@@ -177,7 +201,8 @@ fn retained_families_enforce_storage_limits_without_changing_snapshots() {
     };
     assert_eq!((&message.text, message.complete), (&String::new(), false));
     let restrictions = restored.user_messages.clone();
-    for index in 0..=MAX_FAMILY_RECORDS {
+    let authorization = restored.verified_answers.clone();
+    for index in 0..MAX_FAMILY_RECORDS {
         let order = restored.reserve_order();
         restored.record_assistant_message(
             RetainedUserMessage {
@@ -189,9 +214,36 @@ fn retained_families_enforce_storage_limits_without_changing_snapshots() {
             RetainedInputSource::Local(Some(order)),
         );
     }
+    assert!(!restored.has_omitted_assistant_messages());
+    let evicted = delivered_message("evicted", "Already replaced?", /*acceptance_order*/ 0);
+    assert!(restored.record(&evicted));
+    // The old-order delivery is immediately evicted, so the bounded buffer
+    // cannot prove a subsequent recording with this ID is a duplicate.
+    assert!(restored.record(&evicted));
+    let order = restored.reserve_order();
+    let oversized = delivered_message("oversized", &"x".repeat(MAX_RECORD_BYTES), order);
+    assert!(restored.record(&oversized));
+    assert!(!restored.record(&oversized));
     assert_eq!(restored.user_messages, restrictions);
+    assert_eq!(restored.verified_answers, authorization);
     assert_eq!(restored.assistant_messages.len(), MAX_FAMILY_RECORDS);
     assert!(restored.has_omitted_assistant_messages());
+    assert_eq!(
+        restored.assistant_messages.back().unwrap().value,
+        RetainedUserMessage {
+            origin: crate::UserInputOrigin::User,
+            turn_id: "turn-1".to_owned(),
+            message_id: Some("oversized".to_owned()),
+            text: String::new(),
+            complete: false,
+            phase: None,
+        }
+    );
+    // Once the omission marker is set, another confirmed delivery still needs
+    // its own rollout record even when the bounded window stays incomplete.
+    let later = delivered_message("later", "A later question?", order + 1);
+    assert!(restored.record(&later));
+    assert!(!restored.record(&later));
 }
 
 #[test]
@@ -200,6 +252,8 @@ fn recovered_excerpts_obey_record_and_family_limits() {
     for index in 0..MAX_FAMILY_RECORDS {
         context.record_user_message(
             RetainedUserMessage {
+                phase: None,
+                origin: crate::UserInputOrigin::User,
                 turn_id: "turn-1".to_owned(),
                 message_id: Some(format!("message-{index}")),
                 text: String::new(),
@@ -219,7 +273,9 @@ fn recovered_excerpts_obey_record_and_family_limits() {
 
 #[test]
 fn legacy_checkpoints_mark_user_messages_incomplete() {
-    let RetainedContextEvent::VerifiedAnswer { answer, .. } = publish_answer();
+    let RetainedContextEvent::VerifiedAnswer { answer, .. } = publish_answer() else {
+        panic!("verified answer fixture");
+    };
     let mut wire = serde_json::json!({
         "verified_answers": [answer], "incomplete": false
     });
@@ -287,13 +343,17 @@ fn accepted_order_survives_delayed_recording_and_checkpoint_replay() {
     context.reserve_order();
     let steer_order = context.reserve_order();
     let answer_order = context.reserve_order();
-    let RetainedContextEvent::VerifiedAnswer { answer, .. } = publish_answer();
+    let RetainedContextEvent::VerifiedAnswer { answer, .. } = publish_answer() else {
+        panic!("verified answer fixture");
+    };
     let event = RetainedContextEvent::VerifiedAnswer {
         answer,
         acceptance_order: Some(answer_order),
     };
     context.record(&event);
     let instruction = RetainedUserMessage {
+        phase: None,
+        origin: crate::UserInputOrigin::User,
         turn_id: "turn-1".to_owned(),
         message_id: Some("steer".to_owned()),
         text: "Keep the repository private.".to_owned(),
@@ -301,22 +361,32 @@ fn accepted_order_survives_delayed_recording_and_checkpoint_replay() {
     };
     // Assistant delivery after accepted steering must not move the steering past it.
     let assistant_order = context.reserve_order();
-    context.record_assistant_message(
-        RetainedUserMessage {
-            message_id: Some("assistant".to_owned()),
-            text: "Publish publicly?".to_owned(),
-            ..instruction.clone()
-        },
-        RetainedInputSource::Local(Some(assistant_order)),
-    );
-    let checkpoint = context.clone();
+    let delivered = delivered_message("assistant", "Publish publicly?", assistant_order);
+    assert!(context.record(&delivered));
+    let checkpoint = serde_json::from_value(serde_json::to_value(&context).unwrap()).unwrap();
     context.record_user_message(
         instruction.clone(),
         RetainedInputSource::Local(Some(steer_order)),
     );
     let mut resumed = RetainedContext::default();
     resumed.restore(Some(&checkpoint), &[]);
+    assert!(!resumed.record(&delivered));
     resumed.record_user_message(instruction, RetainedInputSource::Local(Some(steer_order)));
+    // This suffix has no captured version metadata, so replay creates a fresh revision.
+    // Its original contents and acceptance order still reconstruct identically.
+    let mut expected = context.clone();
+    assert_ne!(
+        resumed.user_messages[0].revision,
+        expected.user_messages[0].revision
+    );
+    expected.user_messages[0].revision = resumed.user_messages[0].revision.clone();
+    assert_eq!(resumed, expected);
+    let source = context
+        .source(RetainedContextEntry::UserMessage(
+            &context.user_messages[0].value,
+        ))
+        .unwrap();
+    assert!(resumed.restore_source_revision(&source));
     assert_eq!(resumed, context);
     assert_eq!(
         resumed
@@ -373,6 +443,8 @@ fn adopted_instructions_preserve_local_order_and_rollback_scope() {
     context.record(&publish_answer());
     for index in 0..2 {
         let message = RetainedUserMessage {
+            phase: None,
+            origin: crate::UserInputOrigin::User,
             turn_id: "parent-turn".to_owned(),
             message_id: Some(format!("parent-{index}")),
             text: format!("Parent instruction {index}"),

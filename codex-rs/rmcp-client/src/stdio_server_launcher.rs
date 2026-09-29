@@ -10,7 +10,7 @@
 //! Both paths return [`StdioServerTransport`], so `RmcpClient` can hand the
 //! resulting byte stream to rmcp without knowing where the process lives. The
 //! executor-specific byte adaptation lives in `executor_process_transport`.
-//! Unix local servers inherit only their explicit transport stdio.
+//! Unix local servers use the stdio-only descriptor policy.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -214,6 +214,11 @@ impl StdioServerLauncher for LocalStdioServerLauncher {
 
 // Local private implementation.
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(windows)]
+const CREATE_SUSPENDED: u32 = 0x0000_0004;
+
 #[cfg(unix)]
 const PROCESS_GROUP_TERM_GRACE_PERIOD: Duration = Duration::from_secs(2);
 
@@ -282,12 +287,14 @@ impl LocalStdioServerLauncher {
             let mut command = Command::new(&resolved_program);
             command.current_dir(&cwd).envs(&envs).args(&args);
             command.process_mode(ProcessMode::NewGroup);
-            // MCP uses only stdio; unrelated orchestrator descriptors must not
-            // propagate into the server or commands it launches.
+            // MCP uses only stdio; select Explicit to exclude unrelated
+            // orchestrator descriptors from the server and commands it launches.
             // Descriptor allowlisting is Unix-only. Windows can still inherit unrelated
             // handles and needs a handle allowlist in the shared spawn backend.
             #[cfg(unix)]
             command.descriptor_policy(DescriptorPolicy::Explicit);
+            #[cfg(windows)]
+            command.creation_flags(CREATE_NO_WINDOW);
             command
         };
         #[cfg(windows)]
@@ -298,6 +305,8 @@ impl LocalStdioServerLauncher {
         let job = match codex_utils_pty::JobObject::create_without_breakaway() {
             Ok(job) => {
                 command.prepare_suspended_spawn(&job);
+                // The helper replaces creation flags; retain suspension and suppress the console.
+                command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
                 Some(job)
             }
             Err(error) => {

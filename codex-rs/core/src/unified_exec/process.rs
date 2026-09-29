@@ -58,10 +58,25 @@ pub(crate) struct NoopSpawnLifecycle;
 
 impl SpawnLifecycle for NoopSpawnLifecycle {}
 
+/// Output pending model polling and the retained completion transcript.
+/// Append both under the same lock so cancellation cannot split an update.
+#[derive(Default)]
+pub(crate) struct OutputBuffers<const MAX_BYTES: usize = UNIFIED_EXEC_OUTPUT_MAX_BYTES> {
+    pub(super) pending: HeadTailBuffer<MAX_BYTES>,
+    pub(super) transcript: HeadTailBuffer<MAX_BYTES>,
+}
+
+impl<const MAX_BYTES: usize> OutputBuffers<MAX_BYTES> {
+    pub(super) fn push_chunk(&mut self, chunk: &[u8]) {
+        self.pending.push_chunk(chunk);
+        self.transcript.push_chunk(chunk);
+    }
+}
+
 /// Shared output state exposed to polling and streaming consumers.
 #[derive(Clone)]
 pub(crate) struct OutputHandles<const MAX_BYTES: usize = UNIFIED_EXEC_OUTPUT_MAX_BYTES> {
-    pub(crate) output_buffer: Arc<Mutex<HeadTailBuffer<MAX_BYTES>>>,
+    pub(crate) output_buffer: Arc<Mutex<OutputBuffers<MAX_BYTES>>>,
     pub(crate) output_notify: Arc<Notify>,
     pub(crate) output_closed: Arc<AtomicBool>,
     pub(crate) output_closed_notify: Arc<Notify>,
@@ -121,7 +136,7 @@ impl UnifiedExecProcess {
         spawn_lifecycle: Option<SpawnLifecycleHandle>,
     ) -> Self {
         let output = OutputHandles {
-            output_buffer: Arc::new(Mutex::new(HeadTailBuffer::default())),
+            output_buffer: Arc::new(Mutex::new(OutputBuffers::default())),
             output_notify: Arc::new(Notify::new()),
             output_closed: Arc::new(AtomicBool::new(false)),
             output_closed_notify: Arc::new(Notify::new()),
@@ -278,7 +293,7 @@ impl UnifiedExecProcess {
 
     async fn snapshot_output(&self) -> Vec<u8> {
         let guard = self.output.output_buffer.lock().await;
-        guard.to_bytes()
+        guard.pending.to_bytes()
     }
 
     pub(crate) fn sandbox_type(&self) -> Option<SandboxType> {

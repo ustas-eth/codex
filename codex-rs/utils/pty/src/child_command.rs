@@ -4,6 +4,7 @@
 //! change settings that the native backend cannot inspect. Children receive only
 //! explicitly supplied environment variables and default to kill-on-drop. Stdio,
 //! descriptor inheritance, and compatibility fallbacks are configured independently.
+//! Windows children communicate over pipes and never allocate a console window.
 //! Original Unix inputs retain their NUL validation even when std replaces them.
 
 use std::ffi::OsStr;
@@ -12,6 +13,10 @@ use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 use std::process::Stdio as TokioStdio;
+#[cfg(windows)]
+use winapi::um::winbase::CREATE_NO_WINDOW;
+#[cfg(windows)]
+use winapi::um::winbase::CREATE_SUSPENDED;
 
 use crate::child::Child;
 use crate::child::ChildKind;
@@ -38,6 +43,7 @@ pub enum ProcessMode {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DescriptorPolicy {
     Inherit,
+    /// Exclude unrelated descriptors, allowing launch if best-effort cleanup fails.
     Explicit,
 }
 
@@ -97,6 +103,8 @@ impl Command {
             .stdin(TokioStdio::piped())
             .stdout(TokioStdio::piped())
             .stderr(TokioStdio::piped());
+        #[cfg(windows)]
+        inner.creation_flags(CREATE_NO_WINDOW);
         Self {
             inner,
             #[cfg(unix)]
@@ -208,6 +216,14 @@ impl Command {
         self
     }
 
+    /// Explicit launch attachments, including CLOEXEC descriptors. The caller
+    /// owns them through spawn; only the child's flags are changed.
+    #[cfg(unix)]
+    pub(crate) fn inherit_fds(&mut self, fds: &[std::os::fd::RawFd]) -> &mut Self {
+        self.inherited_fds = fds.to_vec();
+        self
+    }
+
     /// Keep the existing Linux pipe behavior when the spawning parent exits.
     #[cfg(target_os = "linux")]
     pub fn terminate_on_parent_death(&mut self) -> &mut Self {
@@ -224,10 +240,19 @@ impl Command {
         self
     }
 
+    /// Set the Windows process creation flags, replacing any previously selected flags.
+    #[cfg(windows)]
+    pub fn creation_flags(&mut self, flags: u32) -> &mut Self {
+        self.inner.creation_flags(flags);
+        self
+    }
     /// Preserve Job Object assignment before the child begins executing on Windows.
     #[cfg(windows)]
     pub fn prepare_suspended_spawn(&mut self, job: &crate::JobObject) {
         job.prepare_suspended_spawn(&mut self.inner);
+        // Tokio's creation_flags replaces, rather than adds to, the flags.
+        self.inner
+            .creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
     }
 
     /// Reject original inputs that std replaced with a NUL-free placeholder.
@@ -286,9 +311,10 @@ impl Command {
             #[cfg(not(target_os = "linux"))]
             let parent_pid: Option<i32> = None;
             if new_session || explicit_fds || !targets.is_empty() || parent_pid.is_some() {
-                // SAFETY: Keep the existing Unix pre-exec setup in the fallback
-                // backend. The caller keeps the selected descriptors open, and
-                // this callback only changes the child's descriptor table.
+                // SAFETY: The caller keeps the selected descriptors open. Session
+                // and parent-death setup use system calls; Linux and macOS cleanup
+                // avoid allocation after fork. Other Unix targets have an
+                // allocation-after-fork risk documented on close_inherited_fds_except.
                 unsafe {
                     self.inner.pre_exec(move || {
                         if new_session {
@@ -300,6 +326,7 @@ impl Command {
                         if explicit_fds {
                             crate::pty::close_inherited_fds_except(&targets);
                         }
+                        crate::pty::make_fds_inheritable(&targets)?;
                         Ok(())
                     });
                 }

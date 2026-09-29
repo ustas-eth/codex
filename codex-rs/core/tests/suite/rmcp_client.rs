@@ -377,7 +377,9 @@ fn insert_mcp_server(
             environment_id: options.environment_id,
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: options.supports_parallel_tool_calls,
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(10)),
@@ -694,20 +696,30 @@ async fn text_only_mcp_content_uses_content_items() -> anyhow::Result<()> {
         ])
     );
 
-    let first_turn_id = request.body_json()["client_metadata"]["turn_id"].clone();
+    let request_body = request.body_json();
+    let first_turn_id = request_body["client_metadata"]["turn_id"].clone();
     assert!(first_turn_id.is_string());
+    let expected_attribution = json!({
+        "status": "complete",
+        "sources": [{
+            "server_name": "rmcp",
+            "tool_name": "image_scenario",
+            "first_turn_id": first_turn_id,
+        }],
+    });
     assert_eq!(
         serde_json::to_value(codex_core::test_support::mcp_attribution_snapshot(
             &fixture.codex
         ))?,
-        json!({
-            "status": "complete",
-            "sources": [{
-                "server_name": "rmcp",
-                "tool_name": "image_scenario",
-                "first_turn_id": first_turn_id,
-            }],
-        })
+        expected_attribution,
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            request_body["client_metadata"]["mcp_attribution"]
+                .as_str()
+                .context("MCP attribution should be included for the OpenAI provider")?,
+        )?,
+        expected_attribution,
     );
 
     server.verify().await;
@@ -1626,7 +1638,7 @@ enum PrewarmMcpScenario {
 
 #[test_case(PrewarmMcpScenario::Responses; "responses")]
 #[test_case(PrewarmMcpScenario::ResponsesLite; "responses lite")]
-#[test_case(PrewarmMcpScenario::EagerSocketCloses; "first turn reconnects when the eager socket closes")]
+#[test_case(PrewarmMcpScenario::EagerSocketCloses; "prewarm reconnects when the eager socket closes")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn startup_prewarm_connects_before_delayed_mcp_tools_then_reuses_socket(
     scenario: PrewarmMcpScenario,
@@ -1648,11 +1660,12 @@ async fn startup_prewarm_connects_before_delayed_mcp_tools_then_reuses_socket(
         responses::ev_assistant_message("message-1", "done"),
         responses::ev_completed("turn-1"),
     ];
+    let requests = vec![warmup_events, turn_events];
     let connections = if close_eager_socket {
         // A connection without scripted requests closes as soon as it is accepted.
-        vec![Vec::new(), vec![turn_events]]
+        vec![Vec::new(), requests]
     } else {
-        vec![vec![warmup_events, turn_events]]
+        vec![requests]
     };
     let server = responses::start_websocket_server(connections).await;
     let command = stdio_server_bin()?;
@@ -1729,37 +1742,24 @@ async fn startup_prewarm_connects_before_delayed_mcp_tools_then_reuses_socket(
     wait_for_mcp_server(&fixture.codex, "delayed_prewarm").await?;
 
     let namespace = "mcp__delayed_prewarm";
-    if close_eager_socket {
-        fixture.submit_text_turn("hello").await?;
-        let first_turn = server
-            .wait_for_request(/*connection_index*/ 1, /*request_index*/ 0)
-            .await
-            .body_json();
-        assert_eq!(first_turn["type"], "response.create");
-        assert_eq!(first_turn.get("generate"), None);
-        assert_eq!(first_turn.get("previous_response_id"), None);
-        assert!(responses::namespace_child_tool(&first_turn, namespace, "echo").is_some());
-        assert!(server.connections()[0].is_empty());
-        let handshakes = server.handshakes();
-        assert_eq!(handshakes.len(), 2);
-        assert_eq!(
-            handshakes[1].header(X_CODEX_ROUTING_HINT_HEADER),
-            handshakes[0].header(X_CODEX_ROUTING_HINT_HEADER)
-        );
-        fixture.codex.shutdown_and_wait().await?;
-        server.shutdown().await;
-        return Ok(());
-    }
-
-    let prewarm = tokio::time::timeout(
-        Duration::from_secs(5),
-        server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
-    )
+    let connection_index = usize::from(close_eager_socket);
+    let prewarm = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            tokio::select! {
+                request = server.wait_for_request(connection_index, /*request_index*/ 0) => break request,
+                // The reader may observe the close after the initial warmup tries to send.
+                _ = tokio::time::sleep(Duration::from_millis(10)), if close_eager_socket => {
+                    fixture.codex.prewarm().await;
+                }
+            }
+        }
+    })
     .await
     .context("prewarm should send its request after MCP discovery")?
     .body_json();
     assert_eq!(prewarm["type"].as_str(), Some("response.create"));
     assert_eq!(prewarm["generate"].as_bool(), Some(false));
+    assert!(prewarm.get("previous_response_id").is_none());
     assert_eq!(prewarm["service_tier"].as_str(), Some(service_tier));
     let tool_body = if use_responses_lite {
         &prewarm["input"][0]
@@ -1785,13 +1785,23 @@ async fn startup_prewarm_connects_before_delayed_mcp_tools_then_reuses_socket(
     fixture.submit_text_turn("hello").await?;
     let first_turn = tokio::time::timeout(
         Duration::from_secs(5),
-        server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 1),
+        server.wait_for_request(connection_index, /*request_index*/ 1),
     )
     .await
     .context("first turn should reuse the prewarmed socket")?
     .body_json();
+    assert_eq!(first_turn["type"], "response.create");
+    assert!(first_turn.get("generate").is_none());
     assert_eq!(first_turn["previous_response_id"], "warm-1");
-    assert_eq!(server.handshakes().len(), 1);
+    let handshakes = server.handshakes();
+    assert_eq!(handshakes.len(), connection_index + 1);
+    if close_eager_socket {
+        assert!(server.connections()[0].is_empty());
+        assert_eq!(
+            handshakes[1].header(X_CODEX_ROUTING_HINT_HEADER),
+            handshakes[0].header(X_CODEX_ROUTING_HINT_HEADER)
+        );
+    }
 
     fixture.codex.shutdown_and_wait().await?;
     server.shutdown().await;
@@ -3120,7 +3130,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
     let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
 
     let fixture = test_codex()
-        .with_model("gpt-5.4")
+        .with_model("gpt-5.5")
         .with_config(move |config| {
             insert_mcp_server(
                 config,

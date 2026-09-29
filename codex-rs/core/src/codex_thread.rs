@@ -9,6 +9,7 @@ use crate::session::SessionSettingsUpdate;
 use crate::session::Submission;
 use crate::session::new_submission_id;
 use crate::session::session::Session;
+use crate::session::startup_prewarm::PrewarmInput;
 use crate::session::step_settings::StepSettingsUpdate;
 use crate::thread_startup_metadata::ThreadStartupMetadata;
 use codex_diagnostics::Gauge;
@@ -45,6 +46,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -166,8 +168,6 @@ pub use codex_guardian_context::GuardianRootMessage;
 pub struct GuardianAuthorizationVersion {
     /// User-message/reset revision, preserved across compaction and internal context.
     pub user_message_revision: u64,
-    /// Successful host answers captured by the temporary legacy path.
-    pub user_input_response_count: usize,
     /// False when required retained answers or root instructions are unavailable.
     pub retained_context_complete: bool,
 }
@@ -177,7 +177,11 @@ pub struct GuardianAuthorizationVersion {
 pub struct GuardianRootSnapshot {
     /// Authoritative root from which this evidence was captured.
     pub root_thread_id: ThreadId,
+    /// Distinguishes a history reset from additional authorization in the same history.
+    pub(crate) history_reset_version: u64,
     pub authorization_version: GuardianAuthorizationVersion,
+    /// Confirmed assistant context is relevant to review but cannot authorize an action.
+    pub review_context_revision: u64,
     pub messages: Vec<GuardianRootMessage>,
     pub trusted_skill_paths: Vec<String>,
 }
@@ -239,6 +243,24 @@ impl CodexThread {
     /// Returns the session telemetry handle for thread-scoped production instrumentation.
     pub fn session_telemetry(&self) -> SessionTelemetry {
         self.session.services.session_telemetry.clone()
+    }
+
+    /// Schedule the same background model warmup used at startup for an idle thread.
+    /// The next turn consumes the warmup through the existing startup handoff.
+    /// Call after installing host services such as the thread's attestation routing.
+    pub async fn prewarm(&self) {
+        self.session
+            .schedule_startup_prewarm(PrewarmInput::Base)
+            .await;
+    }
+
+    /// Schedule an idle-thread warmup with existing history when the connection needs preparation.
+    /// Sends `generate: false`; the next turn reuses the prepared response only if its prompt
+    /// still extends this history and its request settings match. Uses the same handoff as `prewarm`.
+    pub async fn prewarm_with_history(&self) {
+        self.session
+            .schedule_startup_prewarm(PrewarmInput::History)
+            .await;
     }
 
     /// Whether analytics is enabled for this thread after configuration and host overrides.
@@ -527,6 +549,31 @@ impl CodexThread {
         self.session.inject_if_running(items).await
     }
 
+    /// Environment selections captured by the active turn, before later settings updates.
+    /// Includes environments that are still starting or have failed. Hosts use this snapshot
+    /// to authorize steering against every executor that the active turn selected.
+    pub async fn active_turn_environment_selections(
+        &self,
+    ) -> Option<Vec<TurnEnvironmentSelection>> {
+        let active = self.session.active_turn.lock().await;
+        let task = active.as_ref()?.task.as_ref()?;
+        Some(task.turn_context.initial_environments.all_selections())
+    }
+
+    /// Returns the named running turn's current selections, including environments that are
+    /// still starting or have failed. Returns `None` if that turn is no longer running.
+    pub async fn current_turn_environment_selections(
+        &self,
+        expected_turn_id: &str,
+    ) -> Option<Vec<TurnEnvironmentSelection>> {
+        let active = self.session.active_turn.lock().await;
+        let task = active.as_ref()?.task.as_ref()?;
+        if task.turn_context.sub_id != expected_turn_id || task.cancellation_token.is_cancelled() {
+            return None;
+        }
+        Some(self.session.services.turn_environments.selections())
+    }
+
     /// Captures a regular turn only after its input is recorded. The caller must flush the rollout.
     pub async fn interrupted_turn(
         &self,
@@ -566,6 +613,21 @@ impl CodexThread {
     ) -> ConstraintResult<ThreadConfigSnapshot> {
         let updates = Self::thread_settings_update(overrides);
         self.session.preview_settings(&updates).await
+    }
+
+    /// Queues settings for future turns and waits for Core to accept or reject them.
+    /// Rejections are returned to the caller instead of emitted as thread errors.
+    pub async fn update_thread_settings(
+        &self,
+        thread_settings: ThreadSettingsOverrides,
+    ) -> CodexResult<()> {
+        let (reply, result) = oneshot::channel();
+        self.submit(Op::ThreadSettings {
+            thread_settings,
+            reply: Some(reply),
+        })
+        .await?;
+        result.await.unwrap_or(Err(CodexErr::InternalAgentDied))
     }
 
     /// Restores thread-owned mutable settings captured from another loaded runtime.
@@ -674,6 +736,16 @@ impl CodexThread {
         self.session
             .inject_no_new_turn(vec![item], /*current_turn_context*/ None)
             .await;
+    }
+
+    /// Records an explicit user goal mutation without scheduling a model response.
+    pub async fn record_user_goal_update(
+        &self,
+        update: crate::context::UserGoalUpdate,
+    ) -> CodexResult<()> {
+        self.session.record_user_goal_update(update).await;
+        self.checkpoint_preparation().await?;
+        Ok(())
     }
 
     /// Record raw Responses API items without starting a new turn.
@@ -972,6 +1044,24 @@ impl CodexThread {
             .await?;
 
         Ok(serde_json::to_value(result)?)
+    }
+
+    /// Inspects one server through this thread's current MCP connection.
+    pub async fn mcp_server_status_snapshot(
+        &self,
+        server: &str,
+        detail: codex_mcp::McpSnapshotDetail,
+    ) -> anyhow::Result<(
+        Arc<codex_mcp::McpConfig>,
+        codex_mcp::McpServerStatusSnapshot,
+    )> {
+        self.session.refresh_mcp_if_dirty().await;
+        let runtime_context = self.session.current_mcp_runtime_context().await;
+        self.session
+            .services
+            .mcp_runtime
+            .server_status_snapshot(server, detail, &runtime_context)
+            .await
     }
 
     /// Reads an app resource using the current authority of its originating tool call.

@@ -142,6 +142,17 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the configured provider metadata.
     fn info(&self) -> &ModelProviderInfo;
 
+    /// Returns whether the resolved Responses provider may receive internal tool metadata.
+    fn include_internal_metadata(&self, provider: &Provider) -> bool {
+        self.info().include_internal_metadata
+            || url::Url::parse(&provider.base_url).ok().is_some_and(|url| {
+                url.scheme() == "https"
+                    && url.host_str().is_some_and(|host| {
+                        host == "api.openai.com" || codex_http_client::is_allowed_chatgpt_host(host)
+                    })
+            })
+    }
+
     /// Returns the provider-owned capability upper bounds.
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
@@ -697,6 +708,7 @@ mod tests {
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            include_internal_metadata: false,
         }
     }
 
@@ -1302,7 +1314,6 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
                 ("openai.gpt-5.6-terra", "GPT-5.6 Terra"),
                 ("openai.gpt-5.6-luna", "GPT-5.6 Luna"),
                 ("openai.gpt-5.5", "GPT-5.5"),
-                ("openai.gpt-5.4", "GPT-5.4"),
             ]
         );
 
@@ -1325,7 +1336,6 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
                 "openai.gpt-5.6-terra",
                 "openai.gpt-5.6-luna",
                 "openai.gpt-5.5",
-                "openai.gpt-5.4",
             ]
         );
 
@@ -1348,10 +1358,11 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
         assert!(!configured_model.additional_speed_tiers.is_empty());
         assert!(!configured_model.service_tiers.is_empty());
 
-        let provider = create_model_provider(
-            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
-            /*auth_manager*/ None,
-        );
+        let mut provider_info =
+            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
+        provider_info.base_url =
+            Some("https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1".to_string());
+        let provider = create_model_provider(provider_info, /*auth_manager*/ None);
         let manager = provider.models_manager(
             test_codex_home(),
             Some(ModelsResponse {

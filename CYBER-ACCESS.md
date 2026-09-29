@@ -7,6 +7,10 @@ goal continuations, and native subagents.
 Access still depends on your account entitlement and the selected model. These
 settings apply to the native OpenAI provider with ChatGPT authentication.
 
+Based on Codex 0.159.0. Upstream now preserves the model and access-program pair
+during compaction after a model switch; this branch still supplies the
+configuration defaults described below.
+
 ## Configure
 
 For example, request Daybreak Blue by default while leaving Astra on automatic
@@ -46,29 +50,22 @@ git clone --branch feat/default-cyber-access-program --single-branch \
 cd codex-cyber
 ```
 
-Before building, change the version under `[workspace.package]` in
-`codex-rs/Cargo.toml` from `0.0.0` to:
+The branch sets `[workspace.package].version` in `codex-rs/Cargo.toml` to:
 
 ```toml
-version = "0.156.1+cyber.4aa808c"
+version = "0.159.0+cyber.1"
 ```
 
-This identifies the tested implementation at `4aa808c`, based on upstream main
-at `ad26b25`. Codex sends its compiled version to the backend; leaving it at
+This identifies the patched build based on upstream tag `rust-v0.159.0`.
+Codex sends its compiled version to the backend; leaving it at
 `0.0.0` can cause compatible models to be rejected with a misleading
 ChatGPT-account error. Setting only the package builder's `--package-version`
 does not change that request header.
 
-Refresh the workspace lockfile:
-
-```bash
-(cd codex-rs && cargo update --workspace)
-```
-
 Build the complete package:
 
 ```bash
-just assemble-codex-package \
+STABLE_GIT_COMMIT="$(git rev-parse HEAD)" just assemble-codex-package \
   --target x86_64-unknown-linux-gnu \
   --cargo-profile release \
   --package-dir "$PWD/codex-cyber-package"
@@ -78,6 +75,9 @@ The package builder fetches and verifies the matching Codex-built V8 artifacts.
 The resulting directory includes the CLI, code-mode host, and supporting
 resources. Keep the directory together; copying only the `codex` executable
 leaves out required helpers.
+
+The commit stamp gives the runtime its build provenance; without it, Cargo
+builds display `dev` in parts of the interface even with a release version.
 
 For other platforms, consult the [package builder options](scripts/codex_package/README.md).
 The checks described below were performed on Linux x86-64.
@@ -91,7 +91,7 @@ Run the package directly:
 ./codex-cyber-package/bin/codex
 ```
 
-The reported version should be `0.156.1+cyber.4aa808c`. You can move the complete
+The reported version should be `0.159.0+cyber.1`. You can move the complete
 package directory to a permanent location and put a symlink to its `bin/codex`
 on your PATH under a distinct name such as `codex-cyber`.
 
@@ -109,9 +109,15 @@ use the same Codex configuration and state by default.
 
 ## Verification
 
-The tested implementation passed 738 focused tests. The full workspace suite
-was not run. Live checks confirmed switching from Astra to Sol and executing
-JavaScript and shell commands in a temporary thread.
+Regression tests cover configuration precedence, model switches, goal
+continuations, subagent inheritance, and compaction with the selected program.
+Run the focused tests when updating the upstream base:
+
+```bash
+just test -p codex-core --lib -E 'test(cyber_access_program)'
+just test -p codex-core -p codex-app-server --test all \
+  -E 'test(cyber_access_program) | test(compact_program_tests)'
+```
 
 After installing, verify a real tool call as well as model selection. A
 successful `--version` or `--help` check alone does not establish that the

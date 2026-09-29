@@ -303,14 +303,24 @@ impl GuardianV2Extension {
             Vec::new()
         };
         // Capture root evidence before background metadata resolution or model I/O.
-        // Later root changes invalidate this sample through its captured authorization version.
-        let root_snapshot = if context_mode == GuardianContextMode::ThreadOwned {
+        // Later root authorization or review-context changes invalidate this sample.
+        let root_snapshot = if context_mode != GuardianContextMode::Legacy {
             thread.guardian_root_snapshot().await
         } else {
             None
         };
 
-        let score_authorization = ScoreAuthorization::current(&thread).await;
+        let Some(permissions) = input.permissions.await else {
+            score_progress.fail_closed(sampled_at);
+            record_classification(
+                metrics.as_deref(),
+                classification_started_at.elapsed(),
+                "failure",
+                Some("permission_resolution_error"),
+            );
+            return;
+        };
+        let score_authorization = ScoreAuthorization::current(&thread, &permissions).await;
         let classification = Classification {
             classification_started_at,
             sampler,

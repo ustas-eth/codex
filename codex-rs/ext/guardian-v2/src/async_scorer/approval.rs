@@ -150,7 +150,7 @@ async fn cached_evidence(
         return Err(GuardianReviewReason::ScoringFailure);
     }
     let context_mode = GuardianContextMode::from_history(history.as_ref());
-    if context_mode == GuardianContextMode::ThreadOwned {
+    if context_mode != GuardianContextMode::Legacy {
         let sampler = store
             .get::<LunaSampler>()
             .ok_or(GuardianReviewReason::MissingScore)?;
@@ -188,7 +188,11 @@ async fn cached_evidence(
         record_fast_decision(metrics, "approved", "initial_cua_call");
         return Ok(());
     }
-    let current = ScoreAuthorization::current(thread).await;
+    let Some(permissions) = input.permissions else {
+        record_fast_decision(metrics, "deferred", "permission_resolution_error");
+        return Err(GuardianReviewReason::AuthorizationChanged);
+    };
+    let current = ScoreAuthorization::current(thread, permissions).await;
     // Classification may publish or fail while authorization is collected.
     let cached = progress.inspect(input.tool_call_id);
     if cached.oversized {

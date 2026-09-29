@@ -181,9 +181,51 @@ fn mcp_checkpoint_handles_missing_or_unknown_identity() -> Result<()> {
         restored.mcp_attribution,
         Some(McpAttribution {
             status: McpAttributionStatus::AttributionError,
+            error_reason: None,
             sources: Vec::new(),
         })
     );
+    Ok(())
+}
+
+#[test]
+fn mcp_error_diagnostics_do_not_invalidate_checkpoints() -> Result<()> {
+    let metadata = CodexHarnessMetadata {
+        mcp_attribution: Some(McpAttribution {
+            status: McpAttributionStatus::AttributionError,
+            error_reason: Some(
+                codex_protocol::mcp::McpAttributionErrorReason::HistoryMissingCheckpoint,
+            ),
+            sources: Vec::new(),
+        }),
+        ..Default::default()
+    };
+    for (reason, expected_reason) in [
+        (None, None),
+        (
+            Some(json!("future_reason")),
+            Some(codex_protocol::mcp::McpAttributionErrorReason::Unknown),
+        ),
+        (Some(json!({"invalid": true})), None),
+    ] {
+        let mut serialized = serde_json::to_value(&metadata)?;
+        let attribution = serialized["mcp_attribution"]
+            .as_object_mut()
+            .expect("attribution object");
+        if let Some(reason) = reason {
+            attribution.insert("error_reason".to_string(), reason);
+        } else {
+            attribution.remove("error_reason");
+        }
+        let restored: CodexHarnessMetadata = serde_json::from_value(serialized)?;
+        let mut expected = metadata.clone();
+        expected
+            .mcp_attribution
+            .as_mut()
+            .expect("attribution checkpoint")
+            .error_reason = expected_reason;
+        assert_eq!(restored, expected);
+    }
     Ok(())
 }
 
@@ -215,6 +257,87 @@ fn response_item_rollout_line_preserves_shape() -> Result<()> {
     assert!(matches!(&envelope.item, ResponseItem::Message { .. }));
     assert_eq!(envelope.metadata, None);
     assert_eq!(serde_json::to_value(line)?, legacy_line);
+    Ok(())
+}
+
+#[test]
+fn delivered_assistant_rollout_survives_an_earlier_read_and_rewrite() -> Result<()> {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    enum EarlierRolloutItem {
+        ResponseItem {
+            payload: ResponseItem,
+            metadata: CodexHarnessMetadata,
+        },
+    }
+
+    for complete in [true, false] {
+        let original = RetainedContextEvent::DeliveredAssistantMessage {
+            message: RetainedUserMessage {
+                origin: crate::UserInputOrigin::User,
+                turn_id: "root-turn".to_owned(),
+                message_id: Some("code-cell:message".to_owned()),
+                text: "May I deploy staging?".to_owned(),
+                complete,
+                phase: None,
+            },
+            acceptance_order: 7,
+        };
+        let wire = serde_json::to_value(RolloutItem::RetainedContext(original.clone()))?;
+        let earlier = serde_json::from_value::<EarlierRolloutItem>(wire)?;
+        let EarlierRolloutItem::ResponseItem { payload, metadata } = &earlier;
+        let ResponseItem::Message {
+            role,
+            content,
+            phase,
+            ..
+        } = payload
+        else {
+            panic!("older readers need an assistant message");
+        };
+        assert_eq!(role, "assistant");
+        // The preceding client's Guardian projection excludes commentary.
+        assert_eq!(phase, &None);
+        assert_eq!(metadata.user_input_order, Some(7));
+        let [ContentItem::OutputText { text }] = content.as_slice() else {
+            panic!("older readers need plain assistant text");
+        };
+        if complete {
+            assert_eq!(text, "May I deploy staging?");
+        } else {
+            assert!(!text.contains("deploy staging"));
+            assert!(text.contains("unavailable"));
+        }
+        let mut earlier_checkpoint = RetainedContext::default();
+        earlier_checkpoint.record_assistant_message(
+            RetainedUserMessage {
+                origin: crate::UserInputOrigin::User,
+                turn_id: payload.turn_id().unwrap().to_owned(),
+                message_id: payload.id().map(ToString::to_string),
+                text: text.clone(),
+                complete: true,
+                phase: None,
+            },
+            RetainedInputSource::Local(metadata.user_input_order),
+        );
+        let rewritten_checkpoint =
+            serde_json::from_value(serde_json::to_value(earlier_checkpoint)?)?;
+        let mut restored_checkpoint = RetainedContext::default();
+        restored_checkpoint.restore(Some(&rewritten_checkpoint), &[]);
+        let preserved = restored_checkpoint
+            .ordered_entries()
+            .find_map(|(_, entry)| match entry {
+                RetainedContextEntry::AssistantMessage(message) => Some(message.text.as_str()),
+                _ => None,
+            });
+        assert_eq!(preserved, Some(text.as_str()));
+
+        let rewritten = serde_json::to_value(earlier)?;
+        let RolloutItem::RetainedContext(restored) = serde_json::from_value(rewritten)? else {
+            panic!("new readers need the model-invisible delivery event");
+        };
+        assert_eq!(restored, original);
+    }
     Ok(())
 }
 
@@ -541,7 +664,17 @@ fn compacted_metadata_remains_compatible_with_legacy_response_item_readers() -> 
     };
     assert_eq!(*legacy_response, response_item);
 
-    let checkpoint = crate::GuardianHistoryCheckpoint(vec![response_item.clone()]);
+    let checkpoint = crate::GuardianHistoryCheckpoint(vec![envelope.clone()]);
+    assert_eq!(
+        serde_json::from_value::<Vec<ResponseItem>>(serde_json::to_value(&checkpoint)?)?,
+        vec![response_item.clone()],
+    );
+    assert_eq!(
+        serde_json::from_value::<crate::GuardianHistoryCheckpoint>(serde_json::to_value(vec![
+            response_item.clone()
+        ])?)?,
+        crate::GuardianHistoryCheckpoint(vec![response_item.clone().into()]),
+    );
     let compacted_line = serde_json::to_value(RolloutItem::Compacted(CompactedItem {
         message: "summary".to_string(),
         replacement_history: Some(vec![envelope]),

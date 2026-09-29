@@ -62,6 +62,7 @@ use crate::unified_exec::async_watcher::start_streaming_output;
 use crate::unified_exec::clamp_yield_time;
 use crate::unified_exec::generate_chunk_id;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
+use crate::unified_exec::process::OutputBuffers;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
@@ -229,14 +230,9 @@ fn exec_server_params_for_request(
         sandbox.windows_sandbox_proxy_settings_mode = Some(windows_sandbox_proxy_settings_mode);
         sandbox
     });
-    // Sandbox retries and memory-backed local launches can reuse a unified-exec
-    // ID while the executor still retains the previous process.
-    let exec_server_process_id =
-        if request.exec_server_sandbox.is_some() || request.exec_server_shell_snapshot.is_some() {
-            format!("{process_id}-{}", Uuid::new_v4())
-        } else {
-            process_id.to_string()
-        };
+    // Threads sharing an executor and sandbox retries can reuse a public handle
+    // while the executor still retains its previous process.
+    let exec_server_process_id = format!("{process_id}-{}", Uuid::new_v4());
     codex_exec_server::ExecParams {
         process_id: exec_server_process_id.into(),
         metadata: tool_ctx.map(|ctx| codex_exec_server::ExecMetadata {
@@ -399,7 +395,7 @@ async fn emit_failed_initial_exec_end_if_unstored(
     request: &ExecCommandRequest,
     cwd: PathUri,
     plugin_attribution: Option<PluginCommandAttribution>,
-    transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
+    output_buffer: Arc<tokio::sync::Mutex<OutputBuffers>>,
     fallback_output: String,
     message: String,
     wall_time: Duration,
@@ -418,7 +414,7 @@ async fn emit_failed_initial_exec_end_if_unstored(
         cwd,
         Some(request.process_id.to_string()),
         plugin_attribution,
-        transcript,
+        output_buffer,
         fallback_output,
         message,
         wall_time,
@@ -557,7 +553,7 @@ impl UnifiedExecProcessManager {
             )
         });
 
-        let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
+        let output_buffer = Arc::clone(&process.output_handles().output_buffer);
         let model_context = context.step_context.model_context();
         let mut event_ctx = ToolEventCtx::new(
             context.session.as_ref(),
@@ -595,7 +591,7 @@ impl UnifiedExecProcessManager {
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
-        start_streaming_output(&process, context, Arc::clone(&transcript));
+        start_streaming_output(&process, context);
         let start = Instant::now();
         // Persist live sessions before the initial yield wait so interrupting the
         // turn cannot drop the last Arc and terminate the background process.
@@ -617,7 +613,7 @@ impl UnifiedExecProcessManager {
                 deferred_network_approval.clone(),
                 network_denial_monitor,
                 metrics_sidecar,
-                Arc::clone(&transcript),
+                Arc::clone(&output_buffer),
                 Arc::clone(&initial_exec_command_active),
             )
             .await;
@@ -684,7 +680,7 @@ impl UnifiedExecProcessManager {
                 &request,
                 cwd.clone(),
                 plugin_attribution.clone(),
-                Arc::clone(&transcript),
+                Arc::clone(&output_buffer),
                 text.clone(),
                 message.clone(),
                 wall_time,
@@ -706,7 +702,7 @@ impl UnifiedExecProcessManager {
                 &request,
                 cwd.clone(),
                 plugin_attribution.clone(),
-                Arc::clone(&transcript),
+                Arc::clone(&output_buffer),
                 text.clone(),
                 message.clone(),
                 wall_time,
@@ -785,7 +781,7 @@ impl UnifiedExecProcessManager {
                     &request,
                     cwd.clone(),
                     plugin_attribution.clone(),
-                    Arc::clone(&transcript),
+                    Arc::clone(&output_buffer),
                     text.clone(),
                     message.clone(),
                     wall_time,
@@ -809,7 +805,7 @@ impl UnifiedExecProcessManager {
                 cwd.clone(),
                 Some(process_id.to_string()),
                 plugin_attribution.clone(),
-                Arc::clone(&transcript),
+                Arc::clone(&output_buffer),
                 text.clone(),
                 exit,
                 wall_time,
@@ -1206,7 +1202,7 @@ impl UnifiedExecProcessManager {
         network_approval: Option<DeferredNetworkApproval>,
         network_denial_monitor: Option<tokio::task::JoinHandle<()>>,
         metrics_sidecar: Option<PluginMetricsSidecar>,
-        transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
+        output_buffer: Arc<tokio::sync::Mutex<OutputBuffers>>,
         initial_exec_command_active: Arc<AtomicBool>,
     ) {
         let plugin_metrics_sidecar =
@@ -1246,7 +1242,7 @@ impl UnifiedExecProcessManager {
             cwd,
             process_id,
             plugin_attribution,
-            transcript,
+            output_buffer,
             started_at,
             network_denial_monitor,
             plugin_metrics_sidecar,
@@ -1423,7 +1419,7 @@ impl UnifiedExecProcessManager {
             windows_sandbox,
             tty,
             stdin_open: tty,
-            inherited_fds: &inherited_fds,
+            inherited_fds: codex_utils_pty::ChildFds::Inherited(&inherited_fds),
         })
         .await;
         spawn_lifecycle.after_spawn();
@@ -1610,7 +1606,7 @@ impl UnifiedExecProcessManager {
             let mut wait_for_output = None;
             {
                 let mut guard = output_buffer.lock().await;
-                drained_output = std::mem::take(&mut *guard);
+                drained_output = std::mem::take(&mut guard.pending);
                 has_drained_output =
                     drained_output.retained_bytes() > 0 || drained_output.omitted_bytes() > 0;
                 if !has_drained_output {
@@ -1813,6 +1809,16 @@ impl UnifiedExecProcessManager {
             unregister_network_approval_for_entry(&entry).await;
             entry.process.terminate();
         }
+    }
+
+    /// Resolves stdin's target from the host-owned terminal, not model-supplied metadata.
+    pub(crate) async fn environment_id_for_process(&self, process_id: i32) -> Option<String> {
+        self.process_store
+            .lock()
+            .await
+            .processes
+            .get(&process_id)
+            .map(|entry| entry.environment_id.clone())
     }
 
     pub(crate) async fn list_processes(&self) -> Vec<BackgroundTerminalInfo> {

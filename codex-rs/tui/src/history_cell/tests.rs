@@ -696,7 +696,7 @@ fn final_message_separator_preserves_runtime_metrics_for_short_turns() {
     let rendered = render_lines(&cell.display_lines(/*width*/ 600));
 
     assert_eq!(rendered.len(), 1);
-    assert!(rendered[0].starts_with("  Local tools:"));
+    assert!(rendered[0].starts_with("  Worked for 12s • Local tools:"));
     assert!(rendered[0].contains("Local tools: 3 calls (2.5s)"));
     assert!(rendered[0].contains("Inference: 2 calls (1.2s)"));
     assert!(rendered[0].contains("WebSocket: 1 events send (700ms)"));
@@ -798,6 +798,7 @@ async fn session_info_preserves_styled_tooltip_links() {
 
     let lines = cell.transcript_hyperlink_lines(/*width*/ 30);
     assert_eq!(lines, cell.display_hyperlink_lines(/*width*/ 30));
+    assert_eq!(lines, cell.compact_hyperlink_lines(/*width*/ 30));
     assert_eq!(
         visible_lines(lines.clone()),
         cell.transcript_lines(/*width*/ 30)
@@ -878,11 +879,29 @@ fn ps_output_multiline_snapshot() {
             recent_chunks: vec!["hello".to_string(), "done".to_string()],
         },
         UnifiedExecProcessDetails {
+            command_display: "(\n  sleep 120\n)".to_string(),
+            recent_chunks: Vec::new(),
+        },
+        UnifiedExecProcessDetails {
+            command_display: "sleep 1\r\nsleep 120".to_string(),
+            recent_chunks: Vec::new(),
+        },
+        UnifiedExecProcessDetails {
             command_display: "rg \"foo\" src".to_string(),
             recent_chunks: vec!["src/main.rs:12:foo".to_string()],
         },
     ]);
     let rendered = render_lines(&cell.display_lines(/*width*/ 40)).join("\n");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn ps_output_multiline_long_command_snapshot() {
+    let cell = new_unified_exec_processes_output(vec![UnifiedExecProcessDetails {
+        command_display: format!("(\n  {}\n)", "x".repeat(100)),
+        recent_chunks: Vec::new(),
+    }]);
+    let rendered = render_lines(&cell.display_lines(/*width*/ 100)).join("\n");
     insta::assert_snapshot!(rendered);
 }
 
@@ -1831,52 +1850,11 @@ fn completed_mcp_tool_call_multiple_outputs_inline_snapshot() {
 }
 
 #[test]
-fn session_header_includes_reasoning_level_when_present() {
-    let cell = SessionHeaderHistoryCell::new(
-        "gpt-4o".to_string(),
-        Some(ReasoningEffortConfig::High),
-        /*show_fast_status*/ true,
-        std::env::temp_dir(),
-        "test",
-    );
-
-    let lines = render_lines(&cell.display_lines(/*width*/ 80));
-    let model_line = lines
-        .iter()
-        .find(|line| line.contains("model:"))
-        .expect("model line");
-
-    assert!(model_line.contains("gpt-4o high   fast"));
-    assert!(model_line.contains("/model to change"));
-}
-
-#[test]
-fn session_header_hides_fast_status_when_disabled() {
-    let cell = SessionHeaderHistoryCell::new(
-        "gpt-4o".to_string(),
-        Some(ReasoningEffortConfig::High),
-        /*show_fast_status*/ false,
-        std::env::temp_dir(),
-        "test",
-    );
-
-    let lines = render_lines(&cell.display_lines(/*width*/ 80));
-    let model_line = lines
-        .iter()
-        .find(|line| line.contains("model:"))
-        .expect("model line");
-
-    assert!(model_line.contains("gpt-4o high"));
-    assert!(!model_line.contains("fast"));
-}
-
-#[test]
 fn session_header_clamps_to_narrow_width() {
     const WIDTH: u16 = 44;
     let cell = SessionHeaderHistoryCell::new(
         "gpt-5.6-sol".to_string(),
         Some(ReasoningEffortConfig::XHigh),
-        /*show_fast_status*/ true,
         PathBuf::from("project"),
         "test",
     )
@@ -1885,7 +1863,7 @@ fn session_header_clamps_to_narrow_width() {
     let lines = cell.display_lines(WIDTH);
     let widths = lines.iter().map(line_width).collect::<Vec<_>>();
 
-    assert_eq!(widths, vec![usize::from(WIDTH); lines.len()]);
+    assert!(widths.iter().all(|width| *width <= usize::from(WIDTH)));
     insta::assert_snapshot!(render_lines(&lines).join("\n"));
 }
 
@@ -1898,7 +1876,6 @@ fn session_header_indicates_yolo_mode() {
     let cell = SessionHeaderHistoryCell::new(
         "gpt-5".to_string(),
         /*reasoning_effort*/ None,
-        /*show_fast_status*/ false,
         test_path_buf("/tmp/project").abs().to_path_buf(),
         "test",
     )
@@ -1909,30 +1886,10 @@ fn session_header_indicates_yolo_mode() {
 }
 
 #[test]
-fn session_header_aligns_halfwidth_sound_marks() {
-    let cell: Box<dyn HistoryCell> = Box::new(SessionHeaderHistoryCell::new(
-        "gpt-5-ｶﾞ-ﾊﾟ".to_string(),
-        /*reasoning_effort*/ None,
-        /*show_fast_status*/ false,
-        PathBuf::from("project"),
-        "test",
-    ));
-
-    let width = 80;
-    let height = cell.desired_height(width);
-    let area = Rect::new(0, 0, width, height);
-    let mut buf = Buffer::empty(area);
-    cell.render(area, &mut buf);
-
-    insta::assert_snapshot!("session_header_halfwidth_sound_marks", format!("{buf:?}"));
-}
-
-#[test]
 fn session_header_truncates_halfwidth_directory() {
     let cell: Box<dyn HistoryCell> = Box::new(SessionHeaderHistoryCell::new(
         "gpt-5".to_string(),
         /*reasoning_effort*/ None,
-        /*show_fast_status*/ false,
         PathBuf::from("ｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟ-project"),
         "test",
     ));

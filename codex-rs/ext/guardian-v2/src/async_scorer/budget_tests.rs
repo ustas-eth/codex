@@ -179,6 +179,12 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
                 retained: history.clone(),
                 current: TestConversationHistory(history),
                 compaction_model_hash: Some("budget-checkpoint".to_owned()),
+                review_context_revision: fixture
+                    .test
+                    .codex
+                    .conversation_history_snapshot()
+                    .await
+                    .guardian_review_context_revision(),
             }),
             BudgetEvidence::Image | BudgetEvidence::UserInstructions => {
                 fixture.test.codex.conversation_history_snapshot().await
@@ -196,7 +202,8 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
                 },
             );
             let progress = thread_store.get::<GuardianV2ScoreProgress>().unwrap();
-            let authorization = ScoreAuthorization::current(&fixture.test.codex).await;
+            let authorization =
+                ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
             seed_cached_score(&progress, thread_store, /*index*/ 0, authorization);
             assert_eq!(
                 cached_approval(
@@ -216,6 +223,7 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
         };
         fixture.registry.tool_lifecycle_contributors()[0]
             .on_tool_start(ToolStartInput {
+                permissions: Box::pin(async { Some(Default::default()) }),
                 session_store: &fixture.session_store,
                 thread_store,
                 turn_store: &turn_store,
@@ -268,7 +276,7 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
             assert!(input.contains("optional old commentary"));
         } else {
             assert!(text.contains(&format!(
-                "[1] user: {instruction}\n[2] developer: {approval}\n[3] user: {restriction}\n"
+                "[1] user: {instruction}\n[2] developer: {approval}\n[3] Retained source order: 1\nuser: {restriction}\n"
             )));
         }
         assert!(text.contains(&instruction));

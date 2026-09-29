@@ -25,7 +25,6 @@ use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::RawFileSystemSandboxPolicy;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -196,7 +195,9 @@ impl TurnEnvironment {
             }
             None
         } else {
-            self.shell_snapshot.peek()?.clone()
+            self.shell_snapshot.peek()?.clone().filter(|snapshot| {
+                &snapshot.shell_environment_policy == self.shell_environment_policy()
+            })
         }
     }
 
@@ -373,9 +374,8 @@ enum TurnContextBuildMode {
     /// shared model/multi-agent metadata.
     StartupPrewarm,
 
-    /// Resolves and stores model/multi-agent metadata but skips skill discovery.
-    /// Only for injecting items into an initialized thread; must not initialize
-    /// context or capture an execution step.
+    /// Captures recording settings without updating shared model/multi-agent metadata
+    /// or discovering skills. Must not initialize context or capture an execution step.
     InjectItems,
 }
 
@@ -955,7 +955,10 @@ impl Session {
             use_model_token_budget_defaults,
             model_info,
         );
-        if step_settings.reasoning_effort() == Some(&ReasoningEffort::Persistent) {
+        if per_turn_config
+            .features
+            .persistent_execution_enabled(step_settings.reasoning_effort())
+        {
             super::time_reminder::apply_persistent_defaults(&mut per_turn_config);
         }
         per_turn_config.service_tier = step_settings.service_tier.clone();
@@ -1177,17 +1180,19 @@ impl Session {
             )
             .await;
         let multi_agent_version = match build_mode {
-            TurnContextBuildMode::Full | TurnContextBuildMode::InjectItems => {
-                // A background preview must not overwrite a newer turn's model metadata.
+            TurnContextBuildMode::Full => {
+                // Only execution and initial context creation publish model metadata.
                 self.services
                     .thread_extension_data
                     .insert(model_info.clone());
                 self.resolve_multi_agent_version_for_model(&model_info, &per_turn_config)
             }
-            TurnContextBuildMode::StartupPrewarm => per_turn_config.multi_agent_version_for_model(
-                self.multi_agent_version()
-                    .or(model_info.multi_agent_version),
-            ),
+            TurnContextBuildMode::StartupPrewarm | TurnContextBuildMode::InjectItems => {
+                per_turn_config.multi_agent_version_for_model(
+                    self.multi_agent_version()
+                        .or(model_info.multi_agent_version),
+                )
+            }
         };
         let plugins_input = per_turn_config.plugins_config_input();
         let plugin_outcome = self

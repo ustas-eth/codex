@@ -58,6 +58,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::McpAttribution;
+use codex_protocol::mcp::McpAttributionErrorReason;
 use codex_protocol::mcp::McpAttributionSource;
 use codex_protocol::mcp::McpAttributionStatus;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
@@ -318,29 +319,13 @@ async fn persisted_originator(thread: &CodexThread) -> String {
         .expect("thread rollout should flush");
     let stored_thread = thread
         .read_thread(
-            /*include_archived*/ true, /*include_history*/ true,
+            /*include_archived*/ true, /*include_history*/ false,
         )
         .await
         .expect("thread should be readable");
-    let history = stored_thread.history.expect("history should be loaded");
-    history
-        .items
-        .iter()
-        .find_map(|item| match item {
-            RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.originator.clone()),
-            RolloutItem::ResponseItem(_)
-            | RolloutItem::InterAgentCommunication(_)
-            | RolloutItem::InterAgentCommunicationMetadata { .. }
-            | RolloutItem::EventMsg(_)
-            | RolloutItem::Compacted(_)
-            | RolloutItem::WorldState(_)
-            | RolloutItem::RealtimeItem(_)
-            | RolloutItem::RetainedContext(_)
-            | RolloutItem::SecurityRiskScore(_)
-            | RolloutItem::TokenUsageRecord(_)
-            | RolloutItem::TurnContext(_) => None,
-        })
-        .expect("session metadata should be persisted")
+    stored_thread
+        .originator
+        .expect("originator should be persisted")
 }
 
 fn has_subagent_notification<'a>(
@@ -631,6 +616,7 @@ async fn on_event_updates_status_from_turn_aborted() {
         turn_id: Some("turn-1".to_string()),
         started_at: None,
         reason: TurnAbortReason::Interrupted,
+        error: None,
         completed_at: None,
         duration_ms: None,
     }));
@@ -1306,6 +1292,7 @@ async fn cold_resume_with_thread_instructions_preserves_lazy_v2_child_inheritanc
     let parent = harness
         .manager
         .start_thread(StartThreadOptions {
+            history_mode: Some(ThreadHistoryMode::Legacy),
             thread_instructions_provider: Some(Arc::new(TestThreadInstructionsProvider {
                 text: "initial thread instructions".into(),
                 shared,
@@ -1927,17 +1914,11 @@ async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginate
         .expect("parent shutdown should submit");
 }
 
-#[test_case::test_case(true; "thread context enabled")]
-#[test_case::test_case(false; "thread context disabled")]
 #[tokio::test]
-async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata(thread_context_enabled: bool) {
+async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
     let mut harness = AgentControlHarness::new().await;
     let _ = harness.config.features.disable(Feature::MultiAgentV2);
-    harness
-        .config
-        .features
-        .set_enabled(Feature::GuardianThreadContext, thread_context_enabled)
-        .expect("test context mode");
+
     let (parent_thread_id, parent_thread) = harness.start_paginated_thread().await;
     let parent_resume_metadata = codex_history::CompactionResumeMetadata {
         multi_agent_version: Some(MultiAgentVersion::V2),
@@ -1945,6 +1926,7 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata(thread_context
         previous_turn_settings: Some(codex_history::PreviousTurnSettings {
             model: "parent-model".into(),
             comp_hash: None,
+            cyber_access_program: None,
             realtime_active: None,
         }),
     };
@@ -2178,9 +2160,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();
     let _ = parent_config.features.enable(Feature::MultiAgentV2);
-    let _ = parent_config
-        .features
-        .enable(Feature::GuardianThreadContext);
     parent_config.developer_instructions = Some("Parent developer instructions.".to_string());
     parent_config.multi_agent_v2.root_agent_usage_hint_text =
         Some("Parent root guidance.".to_string());
@@ -2188,7 +2167,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         Some("Parent subagent guidance.".to_string());
     let mut child_config = harness.config.clone();
     let _ = child_config.features.enable(Feature::MultiAgentV2);
-    let _ = child_config.features.enable(Feature::GuardianThreadContext);
     child_config.developer_instructions = Some("Child developer instructions.".to_string());
     child_config.multi_agent_v2.subagent_developer_instructions =
         Some("Child developer instructions.".to_string());
@@ -2198,7 +2176,10 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         Some("Child subagent guidance.".to_string());
     let new_thread = harness
         .manager
-        .start_thread(StartThreadOptions::new(parent_config.clone()))
+        .start_thread(StartThreadOptions {
+            history_mode: Some(ThreadHistoryMode::Legacy),
+            ..StartThreadOptions::new(parent_config.clone())
+        })
         .await
         .expect("start parent thread");
     let parent_thread_id = new_thread.thread_id;
@@ -2536,18 +2517,10 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .expect("parent shutdown should submit");
 }
 
-#[test_case::test_case(true; "thread context enabled")]
-#[test_case::test_case(false; "thread context disabled")]
 #[tokio::test]
-async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(
-    thread_context_enabled: bool,
-) {
+async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();
-    parent_config
-        .features
-        .set_enabled(Feature::GuardianThreadContext, thread_context_enabled)
-        .expect("test context mode");
     let _ = parent_config.features.enable(Feature::MultiAgentV2);
     parent_config.developer_instructions = Some("Parent developer instructions.".to_string());
     parent_config.multi_agent_v2.root_agent_usage_hint_text =
@@ -2555,10 +2528,6 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(
     parent_config.multi_agent_v2.subagent_usage_hint_text =
         Some("Parent subagent guidance.".to_string());
     let mut child_config = harness.config.clone();
-    child_config
-        .features
-        .set_enabled(Feature::GuardianThreadContext, thread_context_enabled)
-        .expect("test context mode");
     let _ = child_config.features.enable(Feature::MultiAgentV2);
     child_config.developer_instructions = Some("Child developer instructions.".to_string());
     child_config.multi_agent_v2.subagent_developer_instructions =
@@ -2670,7 +2639,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(
                 ),
                 retained_context: Some(retained_context),
                 guardian_history: Some(codex_history::GuardianHistoryCheckpoint(vec![
-                    user_message("Parent-local approval must not be inherited."),
+                    user_message("Parent-local approval must not be inherited.").into(),
                 ])),
                 mcp_resource_origins: None,
                 window_number: None,
@@ -2736,17 +2705,12 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(
         ),
         "a subagent must not inherit its parent review checkpoint",
     );
-    assert_eq!(
-        history_contains_text(history.raw_items(), "parent-private-release"),
-        !thread_context_enabled,
-        "only retained mode changes parent approval inheritance",
+    assert!(
+        !history_contains_text(history.raw_items(), "parent-private-release"),
+        "a subagent must not inherit parent-local approval messages",
     );
     let mut inherited_context = codex_history::RetainedContext::default();
-    if thread_context_enabled {
-        inherited_context.reserve_order();
-    } else {
-        inherited_context.mark_user_messages_incomplete();
-    }
+    inherited_context.reserve_order();
     assert_eq!(history.retained_context(), &inherited_context);
     assert!(
         history_contains_text(history.raw_items(), "compacted parent summary"),
@@ -3049,6 +3013,7 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
                     previous_turn_settings: Some(codex_history::PreviousTurnSettings {
                         model: "parent-model".into(),
                         comp_hash: None,
+                        cyber_access_program: None,
                         realtime_active: None,
                     }),
                 }),
@@ -3186,10 +3151,23 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
     }
 }
 
+#[test_case::test_case(false; "complete")]
+#[test_case::test_case(true; "error_reason")]
 #[tokio::test]
-async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests() {
+async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests(
+    record_invalid_source: bool,
+) {
     let harness = AgentControlHarness::new().await;
-    let (source_thread_id, source_thread) = harness.start_thread().await;
+    let source = harness
+        .manager
+        .start_thread(StartThreadOptions {
+            history_mode: Some(ThreadHistoryMode::Legacy),
+            ..StartThreadOptions::new(harness.config.clone())
+        })
+        .await
+        .expect("start legacy source");
+    let source_thread_id = source.thread_id;
+    let source_thread = source.thread;
     let turn_context = source_thread.session.new_default_turn().await;
     source_thread
         .session
@@ -3211,6 +3189,16 @@ async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests() 
         .services
         .executed_tool_calls
         .record_mcp_source(source.clone());
+    if record_invalid_source {
+        source_thread
+            .session
+            .services
+            .executed_tool_calls
+            .record_mcp_source(McpAttributionSource {
+                tool_name: String::new(),
+                ..source.clone()
+            });
+    }
     source_thread
         .session
         .record_conversation_items(
@@ -3240,7 +3228,7 @@ async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests() 
 
     let forked = harness
         .manager
-        .fork_thread(
+        .fork_legacy_thread(
             ForkSnapshot::Interrupted,
             StartThreadOptions::new(harness.config.clone()),
             rollout_path.clone(),
@@ -3249,7 +3237,7 @@ async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests() 
         .expect("fork unloaded source thread");
     let resumed = harness
         .manager
-        .resume_thread_from_rollout(
+        .resume_legacy_thread_from_rollout(
             harness.config.clone(),
             rollout_path,
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
@@ -3259,7 +3247,12 @@ async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests() 
         .await
         .expect("resume source thread");
     let expected = McpAttribution {
-        status: McpAttributionStatus::Complete,
+        status: if record_invalid_source {
+            McpAttributionStatus::AttributionError
+        } else {
+            McpAttributionStatus::Complete
+        },
+        error_reason: record_invalid_source.then_some(McpAttributionErrorReason::SourceInvalid),
         sources: vec![source],
     };
     assert_eq!(
@@ -3502,6 +3495,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         mcp_attribution_in_constructed_request(&child_thread).await,
         McpAttribution {
             status: McpAttributionStatus::Complete,
+            error_reason: None,
             sources: vec![source],
         }
     );

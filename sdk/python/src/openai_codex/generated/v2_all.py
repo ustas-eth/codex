@@ -543,9 +543,11 @@ class CodexErrorInfoValue(Enum):
     session_budget_exceeded = "sessionBudgetExceeded"
     usage_limit_exceeded = "usageLimitExceeded"
     rate_limit_exceeded = "rateLimitExceeded"
+    flex_unavailable = "flexUnavailable"
     server_overloaded = "serverOverloaded"
     cyber_policy = "cyberPolicy"
     misalignment_policy_violation = "misalignmentPolicyViolation"
+    too_many_denials = "tooManyDenials"
     internal_server_error = "internalServerError"
     unauthorized = "unauthorized"
     bad_request = "badRequest"
@@ -3095,6 +3097,7 @@ class PlanType(str, Enum):
     plus = "plus"
     pro = "pro"
     prolite = "prolite"
+    promax = "promax"
     team = "team"
     self_serve_business_prolite = "self_serve_business_prolite"
     self_serve_business_usage_based = "self_serve_business_usage_based"
@@ -3141,16 +3144,6 @@ class PluginHookSummary(BaseModel):
     )
     event_name: Annotated[HookEventName, Field(alias="eventName")]
     key: str
-
-
-class PluginIcon(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    mime_type: Annotated[str | None, Field(alias="mimeType")] = None
-    sizes: list[str] | None = None
-    src: str
-    theme: str | None = None
 
 
 class PluginInstallParams(BaseModel):
@@ -3305,22 +3298,6 @@ class PluginListParams(BaseModel):
     ] = None
 
 
-class ToolPluginQuickActionTarget(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    arguments: Any | None = None
-    name: str
-    type: Annotated[Literal["tool"], Field(title="ToolPluginQuickActionTargetType")]
-
-
-class PluginQuickActionTarget(RootModel[ToolPluginQuickActionTarget]):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: ToolPluginQuickActionTarget
-
-
 class PluginReadParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -3388,28 +3365,10 @@ class PluginReconcileResponse(BaseModel):
     ]
 
 
-class PluginSearchProviderCall(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    field_meta: Annotated[Any, Field(alias="_meta")]
-    arguments: Any
-    name: str
-
-
 class PluginSearchScope(Enum):
     global_ = "global"
     workspace = "workspace"
     personal = "personal"
-
-
-class PluginSettings(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    app_id: Annotated[str, Field(alias="appId")]
-    read_tool_name: Annotated[str, Field(alias="readToolName")]
-    update_tool_name: Annotated[str, Field(alias="updateToolName")]
 
 
 class PluginShareCheckoutParams(BaseModel):
@@ -5497,14 +5456,42 @@ class ContextCompactionThreadItem(BaseModel):
     type: Annotated[Literal["contextCompaction"], Field(title="ContextCompactionThreadItemType")]
 
 
+class ItemThreadItemsListAnchor(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    item_id: Annotated[str, Field(alias="itemId")]
+    type: Annotated[Literal["item"], Field(title="ItemThreadItemsListAnchorType")]
+
+
+class ThreadItemsListAnchor(RootModel[ItemThreadItemsListAnchor]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Annotated[
+        ItemThreadItemsListAnchor,
+        Field(description="An exclusive item position within the requested visible turn."),
+    ]
+
+
+class ThreadItemsListCursor(RootModel[str | ThreadItemsListAnchor]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Annotated[
+        str | ThreadItemsListAnchor,
+        Field(description="Starting position for an item-history page."),
+    ]
+
+
 class ThreadItemsListParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     cursor: Annotated[
-        str | None,
+        ThreadItemsListCursor | None,
         Field(
-            description="Opaque cursor to pass to the next call to continue after the last item."
+            description="Opaque continuation cursor or an exclusive item anchor in the requested visible turn. An item anchor requires a non-empty `turnId`; ascending (the default) returns items after it, and descending returns items before it. Continue with the returned string cursor."
         ),
     ] = None
     limit: Annotated[int | None, Field(description="Optional item page size.", ge=0)] = None
@@ -8483,6 +8470,13 @@ class ListMcpServerStatusParams(BaseModel):
         int | None,
         Field(description="Optional page size; defaults to a server-defined value.", ge=0),
     ] = None
+    server_name: Annotated[
+        str | None,
+        Field(
+            alias="serverName",
+            description="Limit discovery to one server. With a thread ID, reuse that thread's MCP connection.",
+        ),
+    ] = None
     thread_id: Annotated[str | None, Field(alias="threadId")] = None
 
 
@@ -8749,64 +8743,6 @@ class PermissionProfileListResponse(BaseModel):
             description="Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
         ),
     ] = None
-
-
-class SettingsPluginEntrypoint(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    app_id: Annotated[str, Field(alias="appId")]
-    icons: list[PluginIcon]
-    resource_uri: Annotated[str, Field(alias="resourceUri")]
-    search_terms: Annotated[list[str] | None, Field(alias="searchTerms")] = []
-    title: str
-    tool_name: Annotated[str, Field(alias="toolName")]
-    type: Annotated[Literal["settings"], Field(title="SettingsPluginEntrypointType")]
-
-
-class ThreadPluginEntrypoint(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    app_id: Annotated[str, Field(alias="appId")]
-    icons: list[PluginIcon]
-    resource_uri: Annotated[str, Field(alias="resourceUri")]
-    title: str
-    tool_name: Annotated[str, Field(alias="toolName")]
-    type: Annotated[Literal["thread"], Field(title="ThreadPluginEntrypointType")]
-
-
-class FilePluginEntrypoint(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    app_id: Annotated[str, Field(alias="appId")]
-    extensions: list[str]
-    icons: list[PluginIcon]
-    resource_uri: Annotated[str, Field(alias="resourceUri")]
-    title: str
-    tool_name: Annotated[str, Field(alias="toolName")]
-    type: Annotated[Literal["file"], Field(title="FilePluginEntrypointType")]
-
-
-class PluginQuickAction(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    icons: list[PluginIcon]
-    target: PluginQuickActionTarget
-    title: str
-
-
-class PluginSearchProvider(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    app_id: Annotated[str, Field(alias="appId")]
-    call: PluginSearchProviderCall | None = None
-    link_id: Annotated[str, Field(alias="linkId")]
-    title: str
-    tool_name: Annotated[str, Field(alias="toolName")]
 
 
 class PluginSharePrincipal(BaseModel):
@@ -10940,56 +10876,6 @@ class ModelsRequirements(BaseModel):
     new_thread: Annotated[NewThreadModelDefaults | None, Field(alias="newThread")] = None
 
 
-class GlobalPluginEntrypoint(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    app_id: Annotated[str, Field(alias="appId")]
-    icons: list[PluginIcon]
-    quick_action: Annotated[PluginQuickAction | None, Field(alias="quickAction")] = None
-    resource_uri: Annotated[str, Field(alias="resourceUri")]
-    title: str
-    tool_name: Annotated[str, Field(alias="toolName")]
-    type: Annotated[Literal["global"], Field(title="GlobalPluginEntrypointType")]
-
-
-class PluginEntrypoint(
-    RootModel[
-        GlobalPluginEntrypoint
-        | SettingsPluginEntrypoint
-        | ThreadPluginEntrypoint
-        | FilePluginEntrypoint
-    ]
-):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: (
-        GlobalPluginEntrypoint
-        | SettingsPluginEntrypoint
-        | ThreadPluginEntrypoint
-        | FilePluginEntrypoint
-    )
-
-
-class PluginExtensions(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    entrypoints: list[PluginEntrypoint] | None = None
-    file_handlers: Annotated[list[PluginEntrypoint] | None, Field(alias="fileHandlers")] = []
-    search_mention_providers: Annotated[
-        list[PluginSearchProvider] | None, Field(alias="searchMentionProviders")
-    ] = []
-    settings: list[PluginSettings] | None = []
-    settings_entrypoints: Annotated[
-        list[PluginEntrypoint] | None, Field(alias="settingsEntrypoints")
-    ] = []
-    thread_entrypoints: Annotated[
-        list[PluginEntrypoint] | None, Field(alias="threadEntrypoints")
-    ] = []
-
-
 class PluginShareContext(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -11046,7 +10932,6 @@ class PluginSummary(BaseModel):
         ),
     ] = None
     enabled: bool
-    extensions: PluginExtensions | None = None
     id: str
     install_policy: Annotated[PluginInstallPolicy, Field(alias="installPolicy")]
     install_policy_source: Annotated[
@@ -11589,7 +11474,7 @@ class Turn(BaseModel):
         ),
     ] = None
     error: Annotated[
-        TurnError | None, Field(description="Only populated when the Turn's status is failed.")
+        TurnError | None, Field(description="Error associated with a failed or interrupted turn.")
     ] = None
     id: Annotated[
         str, Field(description="Identifier for this turn. Codex-generated turn IDs are UUIDv7.")

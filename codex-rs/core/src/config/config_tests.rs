@@ -141,7 +141,9 @@ fn stdio_mcp_with_args(command: &str, args: &[&str]) -> McpServerConfig {
         environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
         required: false,
+        startup_readiness: Default::default(),
         supports_parallel_tool_calls: false,
+        tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,
         startup_timeout_sec: None,
@@ -169,7 +171,9 @@ fn http_mcp(url: &str) -> McpServerConfig {
         environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
         required: false,
+        startup_readiness: Default::default(),
         supports_parallel_tool_calls: false,
+        tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,
         startup_timeout_sec: None,
@@ -636,6 +640,7 @@ async fn load_config_resolves_code_mode_config() -> std::io::Result<()> {
 enabled = true
 default_exec_yield_time_ms = 10000
 experimental_show_cell_overhead = true
+tool_input_schema_max_bytes = 36000
 excluded_tool_namespaces = ["mcp__codex_apps", "multi_agent_v1"]
 direct_only_tool_namespaces = ["mcp__history", "mcp__notes"]
 
@@ -654,6 +659,7 @@ disable_in_process_fallback = true
 
     assert_eq!(config.code_mode.default_exec_yield_time_ms, 10_000);
     assert!(config.code_mode.experimental_show_cell_overhead);
+    assert_eq!(config.code_mode.tool_input_schema_max_bytes, Some(36_000));
     assert_eq!(
         config.code_mode.excluded_tool_namespaces,
         vec!["mcp__codex_apps".to_string(), "multi_agent_v1".to_string()]
@@ -1264,6 +1270,7 @@ fn config_toml_deserializes_model_availability_nux() {
             raw_output_mode: false,
             fullscreen_transcript: true,
             copy_on_select: Default::default(),
+            right_click_paste: Default::default(),
             alternate_screen: AltScreenMode::default(),
             status_line: None,
             status_line_use_colors: true,
@@ -3722,7 +3729,7 @@ async fn implicit_builtin_workspace_profile_preserves_add_dir_metadata_carveouts
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     let extra_root = TempDir::new()?;
-    for subpath in [".git", ".agents", ".codex"] {
+    for subpath in [".git", ".agents", ".codex", ".aws"] {
         std::fs::create_dir_all(extra_root.path().join(subpath))?;
     }
     let project_key = cwd.path().to_string_lossy().to_string();
@@ -3755,7 +3762,7 @@ async fn implicit_builtin_workspace_profile_preserves_add_dir_metadata_carveouts
         policy.can_write_local_path_with_cwd(extra_root.as_path(), cwd.path()),
         "expected implicit :workspace to preserve additional writable roots, policy: {policy:?}"
     );
-    for subpath in [".git", ".agents", ".codex"] {
+    for subpath in [".git", ".agents", ".codex", ".aws"] {
         assert!(
             !policy.can_write_local_path_with_cwd(&extra_root.join(subpath), cwd.path()),
             "expected implicit :workspace to preserve legacy metadata carveout for {subpath}, \
@@ -4404,6 +4411,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             raw_output_mode: false,
             fullscreen_transcript: true,
             copy_on_select: Default::default(),
+            right_click_paste: Default::default(),
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
             status_line_use_colors: true,
@@ -4943,7 +4951,7 @@ exclude_slash_tmp = true
                             missing_path_behavior: None,
                         })
                 );
-                for subpath in [".git", ".agents", ".codex"] {
+                for subpath in [".git", ".agents", ".codex", ".aws"] {
                     assert!(
                         file_system_policy
                             .entries
@@ -5913,6 +5921,7 @@ url = "https://sample.example/mcp"
                     "Selected Plugin".to_string(),
                 ),
                 /*selection_order*/ 0,
+                codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
                 selected.clone(),
             )],
         )
@@ -6887,7 +6896,9 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
             environment_id: "remote".to_string(),
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: std::num::NonZeroUsize::new(8_000),
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(3)),
@@ -6929,6 +6940,10 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
     assert_eq!(docs.startup_timeout_sec, Some(Duration::from_secs(3)));
     assert_eq!(docs.tool_timeout_sec, Some(Duration::from_secs(5)));
     assert_eq!(docs.environment_id, "remote");
+    assert_eq!(
+        docs.tool_input_schema_max_bytes,
+        std::num::NonZeroUsize::new(8_000)
+    );
     assert!(docs.enabled);
 
     let empty = BTreeMap::new();
@@ -7322,7 +7337,9 @@ async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
@@ -7400,7 +7417,9 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
@@ -7463,7 +7482,9 @@ async fn replace_mcp_servers_serializes_sourced_env_vars() -> anyhow::Result<()>
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
@@ -7517,7 +7538,9 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
@@ -7574,7 +7597,9 @@ async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
@@ -7648,7 +7673,9 @@ async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyh
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
@@ -7733,7 +7760,9 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
@@ -7771,7 +7800,9 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
@@ -7845,7 +7876,9 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
                 enabled: true,
                 required: false,
+                startup_readiness: Default::default(),
                 supports_parallel_tool_calls: false,
+                tool_input_schema_max_bytes: None,
                 omit_tools_from: None,
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
@@ -7873,7 +7906,9 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
                 enabled: true,
                 required: false,
+                startup_readiness: Default::default(),
                 supports_parallel_tool_calls: false,
+                tool_input_schema_max_bytes: None,
                 omit_tools_from: None,
                 disabled_reason: None,
                 startup_timeout_sec: None,
@@ -7963,7 +7998,9 @@ async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: false,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
@@ -8015,7 +8052,9 @@ async fn replace_mcp_servers_serializes_required_flag() -> anyhow::Result<()> {
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: true,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
@@ -8067,7 +8106,9 @@ async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
@@ -8124,7 +8165,9 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
@@ -8459,6 +8502,7 @@ async fn load_config_uses_auto_review_guardian_policy_config_and_template() -> s
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
         auto_review: Some(AutoReviewToml {
+            circuit_break_action: None,
             policy: Some("  Use the user-configured guardian policy.  ".to_string()),
             extra_policy: Some("  Use the user-configured additional policy.  ".to_string()),
             experimental_policy_template: Some(
@@ -8517,6 +8561,7 @@ async fn requirements_guardian_policy_beats_auto_review() -> std::io::Result<()>
         .map_err(std::io::Error::other)?;
         let cfg = ConfigToml {
             auto_review: Some(AutoReviewToml {
+                circuit_break_action: None,
                 policy: Some("Use the user-configured guardian policy.".to_string()),
                 extra_policy: Some("Use the user-configured additional policy.".to_string()),
                 experimental_policy_template: None,
@@ -8555,6 +8600,7 @@ async fn load_config_ignores_empty_auto_review_guardian_policy_config() -> std::
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
         auto_review: Some(AutoReviewToml {
+            circuit_break_action: None,
             policy: Some("   ".to_string()),
             extra_policy: Some("   ".to_string()),
             experimental_policy_template: None,
@@ -9955,6 +10001,8 @@ async fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<
     .await?;
 
     assert_eq!(config.otel.metrics_exporter, OtelExporterKind::Statsig);
+    assert!(!config.otel.agent_response_logging_enabled());
+    assert!(!config.otel.guardian_assessment_logging_enabled());
     Ok(())
 }
 
@@ -9964,6 +10012,8 @@ async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::
     let mut cfg = fixture.cfg.clone();
     cfg.otel = Some(OtelConfigToml {
         tool_result: toml::from_str("max_bytes = 8192").expect("tool-result logging config"),
+        log_agent_responses: Some(true),
+        log_guardian_assessments: Some(true),
         exporter: Some(OtelExporterKind::OtlpHttp {
             endpoint: "http://localhost:14318/v1/logs".to_string(),
             headers: HashMap::new(),
@@ -9974,7 +10024,7 @@ async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::
         ..Default::default()
     });
 
-    let config = Config::load_from_base_config_with_overrides(
+    let mut config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides {
             cwd: Some(fixture.cwd_path()),
@@ -9985,11 +10035,15 @@ async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::
     .await?;
 
     assert_eq!(config.otel.tool_result.max_bytes, 8192);
+    assert!(config.otel.agent_response_logging_enabled());
+    assert!(config.otel.guardian_assessment_logging_enabled());
     assert!(matches!(
         config.otel.exporter,
         OtelExporterKind::OtlpHttp { .. }
     ));
     assert_eq!(config.otel.trace_exporter, OtelExporterKind::None);
+    config.otel.exporter = OtelExporterKind::None;
+    assert!(!config.otel.guardian_assessment_logging_enabled());
     Ok(())
 }
 
@@ -10470,14 +10524,14 @@ trust_level = "trusted"
 
 #[cfg(unix)]
 #[tokio::test]
-async fn active_project_does_not_match_configured_alias_for_canonical_cwd() -> anyhow::Result<()> {
+async fn active_project_preserves_cwd_alias_and_repo_root_precedence() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
     let alias_root = tmp.path().join("project_alias");
     std::fs::create_dir_all(&project_root)?;
     std::os::unix::fs::symlink(&project_root, &alias_root)?;
 
-    let config = ConfigToml {
+    let mut config = ConfigToml {
         projects: Some(HashMap::from([(
             alias_root.to_string_lossy().to_string(),
             ProjectConfig {
@@ -10490,6 +10544,28 @@ async fn active_project_does_not_match_configured_alias_for_canonical_cwd() -> a
     assert_eq!(
         config.get_active_project(&project_root, /*repo_root*/ None),
         None
+    );
+
+    let trusted_root = ProjectConfig {
+        trust_level: Some(TrustLevel::Trusted),
+    };
+    config.projects.as_mut().unwrap().insert(
+        tmp.path().to_string_lossy().into_owned(),
+        trusted_root.clone(),
+    );
+    assert_eq!(
+        config.get_active_project(&project_root, Some(tmp.path())),
+        Some(trusted_root)
+    );
+
+    let empty_cwd = ProjectConfig { trust_level: None };
+    config.projects.as_mut().unwrap().insert(
+        project_root.to_string_lossy().into_owned(),
+        empty_cwd.clone(),
+    );
+    assert_eq!(
+        config.get_active_project(&project_root, Some(tmp.path())),
+        Some(empty_cwd)
     );
 
     Ok(())
@@ -11764,18 +11840,21 @@ shell_tool = false
     Ok(())
 }
 
-#[test]
-fn retired_personality_feature_requirements_do_not_reject_configured_values() -> std::io::Result<()>
-{
+#[test_case::test_case(Feature::Personality; "personality")]
+#[test_case::test_case(Feature::GuardianThreadContext; "guardian thread context")]
+fn retired_feature_requirements_do_not_pin_configured_values(
+    feature: Feature,
+) -> std::io::Result<()> {
+    let key = feature.key();
     for (configured, required) in [(true, false), (false, true)] {
         let cfg: ConfigToml = toml::from_str(&format!(
-            "[features]\npersonality = {configured}\nshell_tool = false\n"
+            "[features]\n\"{key}\" = {configured}\nshell_tool = false\n"
         ))
         .expect("valid config");
         let requirement = Sourced::new(
             FeatureRequirementsToml {
                 entries: BTreeMap::from([
-                    ("personality".to_string(), required),
+                    (key.to_string(), required),
                     ("shell_tool".to_string(), false),
                 ]),
             },
@@ -11802,11 +11881,15 @@ fn retired_personality_feature_requirements_do_not_reject_configured_values() ->
         )?;
         assert_eq!(
             (
-                features.enabled(Feature::Personality),
+                features.enabled(feature),
                 features.enabled(Feature::ShellTool),
-                warnings,
+                warnings.len(),
             ),
-            (false, false, Vec::new()),
+            (
+                Features::with_defaults().enabled(feature),
+                false,
+                usize::from(feature == Feature::GuardianThreadContext),
+            ),
         );
     }
 
@@ -12062,6 +12145,7 @@ hide_spawn_agent_metadata = true
 expose_spawn_agent_model_overrides = false
 wait_agent_enabled = false
 disable_direct_message = true
+message_board_in_memory = true
 non_code_mode_only = true
 
 [agents]
@@ -12118,6 +12202,7 @@ max_concurrent_threads_per_session = 9
     assert!(!config.multi_agent_v2.expose_spawn_agent_model_overrides);
     assert!(!config.multi_agent_v2.wait_agent_enabled);
     assert!(config.multi_agent_v2.disable_direct_message);
+    assert!(config.multi_agent_v2.message_board_in_memory);
     assert!(config.multi_agent_v2.non_code_mode_only);
 
     Ok(())
