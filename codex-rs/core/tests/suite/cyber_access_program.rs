@@ -21,6 +21,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use test_case::test_case;
 use tokio::sync::oneshot;
 use wiremock::Mock;
 use wiremock::matchers::header;
@@ -192,6 +193,56 @@ async fn configured_program_applies_to_new_turns_but_explicit_selection_wins() -
     Ok(())
 }
 
+#[test_case::test_case(false; "api_key_programs_disabled")]
+#[test_case::test_case(true; "api_key_programs_enabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_defaults_preserve_api_key_access_policy(
+    api_key_programs_enabled: bool,
+) -> Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_auth(CodexAuth::from_api_key("test-key"))
+        .with_config(move |config| {
+            config.cyber_access_program = Some(CyberAccessProgramPreference::DaybreakBlue);
+            if api_key_programs_enabled {
+                config
+                    .features
+                    .enable(Feature::ApiKeyCyberAccessPrograms)
+                    .expect("enable API-key programs");
+            } else {
+                config
+                    .features
+                    .disable(Feature::ApiKeyCyberAccessPrograms)
+                    .expect("disable API-key programs");
+            }
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let default_response =
+        responses::mount_sse_once(&server, responses::sse_completed("default")).await;
+    submit(&test, None).await?;
+    assert_eq!(
+        default_response
+            .single_request()
+            .body_json()
+            .get("access_programs"),
+        None
+    );
+
+    if api_key_programs_enabled {
+        let explicit_response =
+            responses::mount_sse_once(&server, responses::sse_completed("explicit")).await;
+        submit(&test, Some(CyberAccessProgram::DaybreakRed)).await?;
+        assert_eq!(
+            explicit_response.single_request().body_json()["access_programs"],
+            json!({"cyber": "daybreak_red"})
+        );
+    }
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cyber_access_program_follows_model_switches_and_exact_overrides() -> Result<()> {
     let server = responses::start_mock_server().await;
@@ -242,11 +293,11 @@ async fn cyber_access_program_follows_model_switches_and_exact_overrides() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cyber_access_program_omits_api_key_and_spoofed_custom_provider() -> Result<()> {
+async fn cyber_access_program_omits_spoofed_custom_providers() -> Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
-    for (auth, provider_id) in [
-        (CodexAuth::from_api_key("test-key"), "openai"),
-        (CodexAuth::create_dummy_chatgpt_auth_for_testing(), "custom"),
+    for auth in [
+        CodexAuth::from_api_key("test-key"),
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     ] {
         let server = responses::start_mock_server().await;
         let request = responses::mount_sse_once(
@@ -256,9 +307,9 @@ async fn cyber_access_program_omits_api_key_and_spoofed_custom_provider() -> Res
         .await;
         let test = test_codex()
             .with_auth(auth)
-            .with_config(move |config| {
+            .with_config(|config| {
                 // Keep the display name "OpenAI": provider identity must not use it.
-                config.model_provider_id = provider_id.to_owned();
+                config.model_provider_id = "custom".to_owned();
                 config.cyber_access_program = Some(CyberAccessProgramPreference::DaybreakBlue);
             })
             .build_with_auto_env(&server)
@@ -285,8 +336,12 @@ async fn cyber_access_program_omits_api_key_and_spoofed_custom_provider() -> Res
     Ok(())
 }
 
+#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(); "chatgpt")]
+#[test_case(CodexAuth::from_api_key("test-api-key"); "api_key")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cyber_access_program_survives_mid_turn_remote_compaction_v2() -> Result<()> {
+async fn cyber_access_program_survives_mid_turn_remote_compaction_v2(
+    auth: CodexAuth,
+) -> Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let requests = responses::mount_sse_sequence(
@@ -313,8 +368,18 @@ async fn cyber_access_program_survives_mid_turn_remote_compaction_v2() -> Result
     )
     .await;
     let test = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| config.model_auto_compact_token_limit = Some(200))
+        .with_auth(auth)
+        .with_config(|config| {
+            config.model_auto_compact_token_limit = Some(200);
+            config
+                .features
+                .enable(Feature::ApiKeyModelDiscovery)
+                .expect("enable API-key model discovery");
+            config
+                .features
+                .enable(Feature::ApiKeyCyberAccessPrograms)
+                .expect("enable API-key Cyber access programs");
+        })
         .build_with_auto_env(&server)
         .await?;
 
@@ -524,8 +589,12 @@ async fn cyber_access_program_is_inherited_by_child_turns(child_selection: &str)
     Ok(())
 }
 
+#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(); "chatgpt")]
+#[test_case(CodexAuth::from_api_key("test-api-key"); "api_key")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cyber_access_program_changes_on_one_websocket_with_response_reuse() -> Result<()> {
+async fn cyber_access_program_changes_on_one_websocket_with_response_reuse(
+    auth: CodexAuth,
+) -> Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
     let response_ids = [
         "prewarm", "first", "second", "blue", "red", "off", "omitted",
@@ -538,7 +607,17 @@ async fn cyber_access_program_changes_on_one_websocket_with_response_reuse() -> 
     ])
     .await;
     let test = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(auth)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::ApiKeyModelDiscovery)
+                .expect("enable API-key model discovery");
+            config
+                .features
+                .enable(Feature::ApiKeyCyberAccessPrograms)
+                .expect("enable API-key Cyber access programs");
+        })
         .build_with_websocket_server(&server)
         .await?;
     for program in [

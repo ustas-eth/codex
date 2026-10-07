@@ -73,7 +73,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 
-mod file_citations;
+mod inline_directives;
 mod list_spacing;
 mod local_links;
 mod math;
@@ -85,7 +85,8 @@ mod table_key_value;
 mod task_lists;
 mod web_links;
 
-use file_citations::FileCitations;
+use inline_directives::InlineDirectives;
+pub(crate) use inline_directives::followup_labels;
 pub(crate) use list_spacing::ListSpacing;
 use list_spacing::UniformList;
 use local_links::is_local_path_like_link;
@@ -996,8 +997,9 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             let index = self.text.len();
             self.push_blank_line();
             if let Some(line) = self.text.get_mut(index) {
-                let mut source =
-                    crate::terminal_hyperlinks::LogicalLineSource::from_line(&line.line);
+                let mut source = line.source.clone().unwrap_or_else(|| {
+                    crate::terminal_hyperlinks::LogicalLineSource::from_line(&line.line)
+                });
                 let mut copy = crate::markdown_copy::CopyLine::default();
                 copy.omit = true;
                 source.copy = Some(std::sync::Arc::new(copy));
@@ -2209,7 +2211,9 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                         }
                         self.push_span_to_table_cell(" (".into());
                     }
+                    self.copy_inline.push(crate::markdown_copy::Inline::Literal);
                     self.push_span_to_table_cell(span);
+                    self.copy_inline.pop();
                     if show_label {
                         self.push_span_to_table_cell(")".into());
                     }
@@ -2229,7 +2233,9 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                         }
                         self.push_span(" (".into());
                     }
+                    self.copy_inline.push(crate::markdown_copy::Inline::Literal);
                     self.push_span(span);
+                    self.copy_inline.pop();
                     if show_label {
                         self.push_span(")".into());
                     }

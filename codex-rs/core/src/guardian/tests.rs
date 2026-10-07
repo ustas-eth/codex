@@ -1052,7 +1052,7 @@ fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
         entries[0],
         ConversationTranscriptEntry {
             kind: ConversationTranscriptEntryKind::ProtectedAssistant,
-            text: "hello".to_string(),
+            content: codex_guardian_context::TranscriptContent::Text("hello".to_string()),
             original_bytes: "hello".len(),
             retained_source: None,
         }
@@ -1108,7 +1108,9 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
         entries[1],
         ConversationTranscriptEntry {
             kind: ConversationTranscriptEntryKind::ToolCall("tool read_file call".to_string()),
-            text: "{\"path\":\"README.md\"}".to_string(),
+            content: codex_guardian_context::TranscriptContent::Text(
+                "{\"path\":\"README.md\"}".to_string()
+            ),
             original_bytes: "{\"path\":\"README.md\"}".len(),
             retained_source: None,
         }
@@ -1117,7 +1119,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
         entries[2],
         ConversationTranscriptEntry {
             kind: ConversationTranscriptEntryKind::ToolOutput("tool read_file result".to_string()),
-            text: "repo is public".to_string(),
+            content: codex_guardian_context::TranscriptContent::Text("repo is public".to_string()),
             original_bytes: "repo is public".len(),
             retained_source: None,
         }
@@ -1146,7 +1148,9 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
                 kind: ConversationTranscriptEntryKind::NodeReplToolOutput(
                     "tool read_file result".to_string()
                 ),
-                text: guardian_truncate_text(&oversized_result, token_cap).0,
+                content: codex_guardian_context::TranscriptContent::Text(
+                    guardian_truncate_text(&oversized_result, token_cap).0
+                ),
                 original_bytes: oversized_result.len(),
                 retained_source: None,
             }
@@ -1158,7 +1162,10 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
                 vec![
                     "[1] user: check the repo".to_string(),
                     "[2] tool read_file call: {\"path\":\"README.md\"}".to_string(),
-                    format!("[3] tool read_file result: {}", entries[2].text),
+                    format!(
+                        "[3] tool read_file result: {}",
+                        guardian_truncate_text(&oversized_result, token_cap).0
+                    ),
                     "[4] assistant: I need to push a fix".to_string(),
                 ],
                 None,
@@ -2650,6 +2657,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             /*reference_context_item*/ None,
             /*world_state_baseline*/ None,
             crate::compact::CompactedHistoryMetadata {
+                input_goal_ids: Default::default(),
                 message: String::new(),
                 window_number,
                 window_ids,
@@ -3442,7 +3450,8 @@ async fn guardian_review_routes_required_actions(
         | RequiredGuardianReview::LiveManagedModelWithGuardianV2 => {
             Arc::make_mut(&mut context.model_info).slug = "required-action-model".to_string();
             // The admitted turn has neither this model nor the new requirement.
-            let mut config = session.get_config().await.as_ref().clone();
+            let current_config = session.get_config().await;
+            let mut config = current_config.as_ref().clone();
             let requirements = codex_config::ConfigRequirements {
                 auto_review_required_models: Some(Sourced::new(
                     std::collections::BTreeSet::from([context.model_info.slug.clone()]),
@@ -3459,7 +3468,7 @@ async fn guardian_review_routes_required_actions(
                 requirements,
                 config.config_layer_stack.requirements_toml().clone(),
             )?;
-            session.refresh_mcp_config(config).await;
+            let _ = session.refresh_mcp_config(current_config, config).await;
             (
                 guardian_exec_command_request("shell-live-managed-model"),
                 ApprovalRequestReasons::default(),

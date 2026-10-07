@@ -46,7 +46,7 @@ fn section(label: &str, history_len: usize) -> ContextSection {
             kind: ConversationTranscriptEntryKind::User,
             original_bytes: text.len(),
             retained_source: None,
-            text,
+            content: crate::TranscriptContent::Text(text),
         }],
     }
 }
@@ -200,9 +200,10 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
         super::GuardianRootMessage::IncompleteRootInstructions,
     ];
     let answers = ["assistant: Publish?\nuser: No.\n".to_string()];
-    let reviews = super::PreviousReviews::try_from_fragments(vec![
-        "<guardian_sync_review>debug-secret review</guardian_sync_review>".to_string(),
-    ])
+    let reviews = super::PreviousReviews::try_from_fragments(vec![super::PreviousReview {
+        id: codex_protocol::ResponseItemId::new("review"),
+        fragment: "<guardian_sync_review>debug-secret review</guardian_sync_review>".to_string(),
+    }])
     .unwrap();
     let permissions = super::PermissionContext {
         environment_id: None,
@@ -277,7 +278,7 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
             ],
             }, ContextSection::ConversationTranscript { items: vec![ConversationTranscriptEntry {
                 kind: ConversationTranscriptEntryKind::User,
-                text: "Inspect the workspace.".into(),
+                content: crate::TranscriptContent::Text("Inspect the workspace.".into()),
                 original_bytes: "Inspect the workspace.".len(),
                 retained_source: None,
             }],

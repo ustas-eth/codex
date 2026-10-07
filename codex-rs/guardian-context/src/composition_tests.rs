@@ -5,9 +5,12 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
-    let message = crate::PreviousReviews::try_from_fragments(vec!["host-attested review".into()])
-        .unwrap()
-        .into_message();
+    let message = crate::PreviousReviews::try_from_fragments(vec![crate::PreviousReview {
+        id: codex_protocol::ResponseItemId::new("review"),
+        fragment: "host-attested review".into(),
+    }])
+    .unwrap()
+    .into_annotated_message();
     let sections = || {
         vec![
             SectionOutput {
@@ -16,7 +19,9 @@ fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
             },
             SectionOutput {
                 id: "new_message_section",
-                delivery: SectionDelivery::Message(Box::new(message.clone())),
+                delivery: SectionDelivery::Message(crate::Budgeted::required(Box::new(
+                    message.clone(),
+                ))),
             },
             SectionOutput {
                 id: "another_user_section",
@@ -39,7 +44,7 @@ fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
                     text: "second".into()
                 }
             ]),
-            message.clone(),
+            message.item.clone(),
             user_message(vec![ContentItem::InputText {
                 text: "third".into()
             }]),
@@ -141,7 +146,7 @@ fn sender_restrictions_survive_budget_trimming_for_both_reviewers() {
             presentation,
             RenderedTranscript {
                 items: vec![Budgeted::optional(
-                    "old tool output ".repeat(/*n*/ 2_000),
+                    crate::TranscriptContent::Text("old tool output ".repeat(/*n*/ 2_000)),
                     BudgetPriority::Tool,
                 )],
                 omission_note: None,

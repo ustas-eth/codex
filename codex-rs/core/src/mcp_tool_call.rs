@@ -104,6 +104,7 @@ use tracing::field::Empty;
 use url::Url;
 
 mod account;
+pub(crate) mod conversation_history;
 mod telemetry;
 
 use account::McpToolAccountError;
@@ -212,15 +213,7 @@ pub(crate) async fn handle_mcp_tool_call(
     let item_metadata = McpToolCallItemMetadata::from_tool_metadata(&server, Some(&metadata));
     let runtime_config = prepared_call.config();
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
-        let annotations = metadata.annotations.as_ref();
-        AppToolPolicyEvaluator::new(&runtime_config.config_layer_stack).policy(AppToolPolicyInput {
-            connector_id: metadata.connector_id.as_deref(),
-            link_id: metadata.link_id.as_deref(),
-            tool_name: &tool_name,
-            tool_title: metadata.tool_title.as_deref(),
-            destructive_hint: annotations.and_then(|annotations| annotations.destructive_hint),
-            open_world_hint: annotations.and_then(|annotations| annotations.open_world_hint),
-        })
+        app_tool_policy(runtime_config, &metadata, &tool_name)
     } else {
         AppToolPolicy::default()
     };
@@ -881,6 +874,12 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
         codex_linux_sandbox_exe: prepared_call.config().codex_linux_sandbox_exe.clone(),
         sandbox_cwd,
         use_legacy_landlock: prepared_call.config().use_legacy_landlock,
+        use_mxc: prepared_call
+            .config()
+            .environment_use_mxc
+            .get(server_environment_id)
+            .copied()
+            .unwrap_or(false),
     })?;
 
     match meta.as_mut() {
@@ -1498,16 +1497,7 @@ async fn maybe_request_mcp_tool_approval(
     policy: McpToolApprovalPolicy,
 ) -> Option<ReviewDecision> {
     let turn_context = &step_context.turn;
-    let turn_state = sess
-        .active_turn
-        .lock()
-        .await
-        .as_ref()
-        .map(|active| Arc::clone(&active.turn_state));
-    let strict_auto_review = match turn_state {
-        Some(turn_state) => turn_state.lock().await.strict_auto_review_enabled(),
-        None => false,
-    };
+    let strict_auto_review = turn_context.strict_auto_review_enabled();
     let approvals_reviewer = connectors::mcp_approvals_reviewer_from_layers(
         &config.config_layer_stack,
         step_context
@@ -1796,6 +1786,22 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
                 read_only_hint: annotations.read_only_hint,
             }),
     }
+}
+
+fn app_tool_policy(
+    config: &codex_mcp::McpConfig,
+    metadata: &McpToolApprovalMetadata,
+    tool_name: &str,
+) -> AppToolPolicy {
+    let annotations = metadata.annotations.as_ref();
+    AppToolPolicyEvaluator::new(&config.config_layer_stack).policy(AppToolPolicyInput {
+        connector_id: metadata.connector_id.as_deref(),
+        link_id: metadata.link_id.as_deref(),
+        tool_name,
+        tool_title: metadata.tool_title.as_deref(),
+        destructive_hint: annotations.and_then(|annotations| annotations.destructive_hint),
+        open_world_hint: annotations.and_then(|annotations| annotations.open_world_hint),
+    })
 }
 
 fn mcp_tool_metadata(

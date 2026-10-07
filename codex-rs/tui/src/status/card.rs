@@ -51,7 +51,7 @@ use crate::wrapping::word_wrap_lines;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-const CHATGPT_USAGE_URL: &str = "https://chatgpt.com/codex/settings/usage";
+const CHATGPT_USAGE_URL: &str = "https://chatgpt.com/settings/usage";
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -322,13 +322,15 @@ impl StatusHistoryCell {
                 .map(|effort| effort.to_string())
                 .unwrap_or_else(|| "none".to_string());
             config_entries.push(("reasoning effort", effort_value));
-            config_entries.push((
-                "reasoning summaries",
-                config
-                    .model_reasoning_summary
-                    .map(|summary| summary.to_string())
-                    .unwrap_or_else(|| "auto".to_string()),
-            ));
+            if remote_connection.is_none() {
+                config_entries.push((
+                    "reasoning summaries",
+                    config
+                        .model_reasoning_summary
+                        .map(|summary| summary.to_string())
+                        .unwrap_or_else(|| "auto".to_string()),
+                ));
+            }
         }
         let (model_name, model_details) = compose_model_display(model_name, &config_entries);
         let approval = config_entries

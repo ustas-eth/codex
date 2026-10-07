@@ -94,6 +94,14 @@ pub(super) async fn update_thread_metadata(
         None
     };
     let paginated = matches!(history_mode, Some(ThreadHistoryMode::Paginated));
+    if paginated
+        && patch.name.is_some()
+        && live_writer::rollout_path(store, thread_id).await.is_ok()
+    {
+        // Naming saves a new thread even before its first turn. Persist its live recorder before
+        // updating SQLite so the named thread can be resumed immediately or after a restart.
+        live_writer::persist_thread(store, thread_id).await?;
+    }
     let needs_rollout_compat = requires_rollout_compat || patch.name.is_some();
     // Reject competing writers before committing any part of a legacy rollout patch to SQLite.
     let writer_lock = if !paginated
@@ -360,6 +368,22 @@ async fn apply_metadata_update(
                     .map_err(|err| ThreadStoreError::Internal {
                         message: format!("failed to read thread metadata for {thread_id}: {err}"),
                     })?;
+            // Existing timestamp-only observations must not rewrite metadata or its indexes.
+            // Missing rows and changed rollout paths still need the normal repair path.
+            if let Some(updated_at) = patch.updated_at
+                && patch.is_empty_except_updated_at()
+                && existing.as_ref().is_some_and(|metadata| {
+                    rollout_path.as_ref().is_none_or(|path| path == &metadata.rollout_path)
+                })
+                && state_db
+                    .touch_thread_updated_at(thread_id, updated_at)
+                    .await
+                    .map_err(|err| ThreadStoreError::Internal {
+                        message: format!("failed to update thread timestamp for {thread_id}: {err}"),
+                    })?
+            {
+                return Ok(());
+            }
             let project_id = if existing.is_none()
                 && let Some(Some(project_id)) = patch.project_id.as_ref()
                 && state_db
@@ -1271,6 +1295,7 @@ mod tests {
         let path = write_session_file(home.path(), "2025-01-03T12-00-00", uuid)?;
         store
             .resume_thread(ResumeThreadParams {
+                history_revision: None,
                 thread_id,
                 rollout_path: Some(path.clone()),
                 history: None,
@@ -1490,6 +1515,7 @@ mod tests {
 
         store
             .resume_thread(ResumeThreadParams {
+                history_revision: None,
                 thread_id,
                 rollout_path: Some(path.clone()),
                 history: None,
@@ -2377,6 +2403,7 @@ mod tests {
         .await;
         store
             .resume_thread(ResumeThreadParams {
+                history_revision: None,
                 thread_id,
                 rollout_path: Some(archived_path.clone()),
                 history: None,

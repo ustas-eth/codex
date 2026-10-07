@@ -125,8 +125,12 @@ pub struct ResumeThreadParams {
     pub thread_id: ThreadId,
     /// Known local rollout path when the caller resumed from a specific file.
     pub rollout_path: Option<PathBuf>,
-    /// Known replay history for the resumed thread, if already loaded by the caller.
+    /// Previously loaded replay history. A canonical session header identifies a stored snapshot
+    /// that may need refreshing under writer ownership; other histories are explicit overrides.
     pub history: Option<Arc<Vec<RolloutItem>>>,
+    /// Opaque revision paired with `history`, validated by the store under writer ownership.
+    #[serde(skip)]
+    pub history_revision: Option<String>,
     /// Whether archived threads may be reopened.
     pub include_archived: bool,
     /// Metadata for future writes appended to the resumed live thread.
@@ -175,6 +179,9 @@ pub struct StoredThreadHistory {
     pub thread_id: ThreadId,
     /// Persisted rollout items in replay order.
     pub items: Vec<RolloutItem>,
+    /// Optional revision for reusing this exact snapshot within the current process.
+    #[serde(skip)]
+    pub revision: Option<String>,
 }
 
 /// Persisted rollout items needed to reconstruct the latest model-visible context.
@@ -188,6 +195,9 @@ pub struct StoredModelContext {
     pub thread_id: ThreadId,
     /// Persisted rollout items in replay order.
     pub items: Vec<RolloutItem>,
+    /// Optional revision for reusing this exact snapshot within the current process.
+    #[serde(skip)]
+    pub revision: Option<String>,
 }
 
 /// Requested boundary for inheriting a paginated thread's history.
@@ -914,6 +924,10 @@ impl ThreadMetadataPatch {
     }
 
     pub fn is_empty(&self) -> bool {
+        self.updated_at.is_none() && self.is_empty_except_updated_at()
+    }
+
+    pub(crate) fn is_empty_except_updated_at(&self) -> bool {
         self.name.is_none()
             && self.rollout_path.is_none()
             && self.preview.is_none()
@@ -922,7 +936,6 @@ impl ThreadMetadataPatch {
             && self.model.is_none()
             && self.reasoning_effort.is_none()
             && self.created_at.is_none()
-            && self.updated_at.is_none()
             && self.advance_recency_at.is_none()
             && self.source.is_none()
             && self.originator.is_none()

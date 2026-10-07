@@ -40,6 +40,13 @@ pub(super) fn overlay_new_session_defaults(
     if !has_launch_setting(config, cli_kv_overrides, "model_reasoning_effort") {
         config.model_reasoning_effort = defaults.model_reasoning_effort.clone();
     }
+    if !has_launch_setting(config, cli_kv_overrides, "daybreak") {
+        config.daybreak_enabled = defaults
+            .additional
+            .get("daybreak")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+    }
 }
 
 impl App {
@@ -67,12 +74,21 @@ impl App {
                 self.config.clone()
             }
         };
-        self.apply_runtime_policy_overrides(&mut config, RuntimePolicyOverrideScope::All);
+        if let Some(defaults) = defaults.as_ref() {
+            crate::projectless::apply_defaults(
+                &mut config,
+                &self.harness_overrides,
+                app_server,
+                &self.environment_manager,
+                defaults,
+            );
+        }
+        self.apply_runtime_policy_overrides(&mut config, RuntimePolicyOverrideScope::ExplicitOnly)?;
         config.service_tier = self.chat_widget.configured_service_tier();
         if let Some(defaults) = defaults.as_ref() {
             overlay_new_session_defaults(
                 &mut config,
-                defaults,
+                &defaults.config,
                 &self.cli_kv_overrides,
                 &self.harness_overrides,
             );

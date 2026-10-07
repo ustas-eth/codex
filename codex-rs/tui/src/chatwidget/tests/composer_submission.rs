@@ -389,6 +389,7 @@ async fn parent_owned_thread_preserves_queued_input_before_draining() {
     let queued_message = QueuedUserMessage {
         user_message: UserMessage::from("keep this queued prompt"),
         action: QueuedInputAction::Plain,
+        delivery: MessageDelivery::Unsent,
         pending_pastes: vec![("[Image 1]".to_string(), "pasted contents".to_string())],
         source: UserMessageSource::Prompt,
     };
@@ -420,6 +421,7 @@ async fn submission_preserves_text_elements_and_local_images() {
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
@@ -437,7 +439,6 @@ async fn submission_preserves_text_elements_and_local_images() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -530,6 +531,7 @@ async fn submission_includes_configured_active_permission_profile() {
     };
     let expected_active_permission_profile = ActivePermissionProfile::new("custom");
     let configured = crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
@@ -547,7 +549,6 @@ async fn submission_includes_configured_active_permission_profile() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -586,6 +587,7 @@ async fn submission_omits_active_permission_profile_for_legacy_snapshot() {
         file_system: ManagedFileSystemPermissions::Unrestricted,
     };
     let configured = crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
@@ -603,7 +605,6 @@ async fn submission_omits_active_permission_profile_for_legacy_snapshot() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -632,6 +633,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
@@ -649,7 +651,6 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -733,6 +734,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
@@ -750,7 +752,6 @@ async fn enter_with_only_remote_images_submits_user_turn() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -803,6 +804,7 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
@@ -820,7 +822,6 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -845,6 +846,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
@@ -862,7 +864,6 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -887,6 +888,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
@@ -904,7 +906,6 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -932,6 +933,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
@@ -949,7 +951,6 @@ async fn submission_prefers_selected_duplicate_skill_path() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -1498,7 +1499,6 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
             collaboration_mode: Some(CollaborationMode { mode, .. }),
-            personality: None,
             ..
         } => assert_eq!(mode, expected_mode),
         other => {
@@ -1826,7 +1826,9 @@ async fn restore_thread_input_state_applies_running_state_policy() {
         queued_user_messages: VecDeque::from([UserMessage::from("already queued").into()]),
         queued_user_message_history_records: VecDeque::from([queued_history.clone()]),
         recovered_queue: false,
+        reconnect_pending: false,
         user_turn_pending_start: true,
+        pending_user_message_client_id: None,
         submit_pending_steers_after_interrupt: true,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
@@ -1867,7 +1869,8 @@ async fn restore_thread_input_state_applies_running_state_policy() {
     );
     assert!(!chat.has_queued_follow_up_messages());
     // Editing the last queued draft must not release the uncertain steer for replay.
-    assert!(chat.capture_thread_input_state().unwrap().recovered_queue);
+    assert_eq!(chat.input_queue.pending_steers.len(), 1);
+    assert!(chat.input_queue.suppress_queue_autosend);
     chat.handle_restricted_key(
         KeyEvent::new(KeyCode::Up, KeyModifiers::ALT),
         RestrictedInputMode::Disconnected,
@@ -2359,44 +2362,104 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 }
 
 #[tokio::test]
-async fn reconnect_holds_only_recovered_input_until_manually_edited() {
-    for (recovered, pending_start) in [
-        (None, false),
-        (Some("review this old input"), false),
-        (Some("unacknowledged prompt"), true),
-    ] {
+async fn reconnect_resumes_unsent_input_and_reconciles_confirmed_submissions() {
+    for pending_start in [false, true] {
         let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
-        if let Some(text) = recovered {
-            if pending_start {
-                chat.input_queue.user_turn_pending_start = true;
-                chat.safety_buffering_prompt = Some(UserMessage::from(text));
-            } else {
-                chat.input_queue
-                    .queued_user_messages
-                    .push_back(UserMessage::from(text).into());
-            }
-        }
-        chat.pause_for_disconnect();
-        let input = chat.capture_thread_input_state();
-        let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
         chat.thread_id = Some(ThreadId::new());
-        chat.restore_reconnected_input(input);
-        chat.set_queue_autosend_suppressed(/*suppressed*/ false);
-        if let Some(text) = recovered {
-            assert!(!chat.maybe_send_next_queued_input());
-            chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
-            assert_eq!(chat.bottom_pane.composer_text(), text);
-            assert_no_submit_op(&mut ops);
-            chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-            assert_matches!(next_submit_op(&mut ops), Op::UserTurn { .. });
-            chat.input_queue.user_turn_pending_start = false;
+        if !pending_start {
+            handle_turn_started(&mut chat, "turn-1");
         }
+        chat.submit_user_message("first message".into());
+        let client_id = if pending_start {
+            chat.input_queue
+                .pending_user_message_client_id
+                .clone()
+                .unwrap()
+        } else {
+            chat.input_queue.pending_steers[0].client_id.clone()
+        };
         chat.input_queue
             .queued_user_messages
-            .push_back(UserMessage::from("new follow-up").into());
-        assert!(chat.maybe_send_next_queued_input());
-        assert_matches!(next_submit_op(&mut ops), Op::UserTurn { .. });
+            .push_back(UserMessage::from("follow-up").into());
+        chat.pause_for_disconnect();
+        let mut input = chat.capture_thread_input_state();
+        // Missing history and unrelated receipts never authorize resubmitting uncertain input.
+        for ids in [
+            vec![],
+            vec!["different-submission".into()],
+            vec![client_id.clone()],
+        ] {
+            let confirmed = ids.contains(&client_id);
+            input.as_mut().unwrap().reconnect_pending = true;
+            let (mut restored, mut rx, mut ops) =
+                make_chatwidget_manual(/*model_override*/ None).await;
+            restored.thread_id = Some(ThreadId::new());
+            if confirmed && pending_start {
+                // A fresh steer submitted during recovery must remain uncertain after navigation.
+                let steer = pending_steer("later steer");
+                let later_id = steer.client_id.clone();
+                input.as_mut().unwrap().pending_steers.push_back(steer);
+                input.as_mut().unwrap().reconnect_pending = false;
+                restored.restore_reconnected_input(input, &[]);
+                for (text, id) in [("first message", &client_id), ("later steer", &later_id)] {
+                    assert_no_submit_op(&mut ops);
+                    restored.on_committed_user_message(
+                        &[UserInput::Text {
+                            text: text.into(),
+                            text_elements: Vec::new(),
+                        }],
+                        Some(id),
+                        /*from_replay*/ false,
+                        "turn-1",
+                    );
+                }
+            } else {
+                restored.restore_reconnected_input(input, &ids);
+                assert_eq!(restored.maybe_send_next_queued_input(), confirmed);
+            }
+            if confirmed {
+                assert_matches!(next_submit_op(&mut ops), Op::UserTurn { items, .. }
+                if items == vec![UserInput::Text {
+                    text: "follow-up".into(),
+                    text_elements: Vec::new(),
+                }]);
+                assert!(!restored.has_queued_follow_up_messages());
+            } else {
+                assert_eq!(
+                    restored.queued_user_message_texts(),
+                    vec!["first message", "follow-up"]
+                );
+                assert_no_submit_op(&mut ops);
+                let notice = drain_insert_history(&mut rx)
+                    .into_iter()
+                    .flatten()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                insta::allow_duplicates! {
+                    assert_snapshot!(notice, @"• Couldn't confirm whether “first message” was sent. It hasn't been resent.");
+                }
+            }
+            input = restored.capture_thread_input_state();
+        }
     }
+}
+
+#[tokio::test]
+async fn reconnect_keeps_queue_paused_after_pending_compact() {
+    let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.prepare_local_op_submission(&AppCommand::Compact);
+    chat.queue_user_message("follow-up".into());
+    chat.pause_for_disconnect();
+    let mut input = chat.capture_thread_input_state();
+    input.as_mut().unwrap().reconnect_pending = true;
+    chat.restore_reconnected_input(input, &[]);
+    chat.set_queue_autosend_suppressed(/*suppressed*/ false);
+
+    assert!(!chat.maybe_send_next_queued_input());
+    assert_eq!(chat.queued_user_message_texts(), vec!["follow-up"]);
+    assert_no_submit_op(&mut ops);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2522,6 +2585,9 @@ async fn image_preparation_failure_restores_full_input_without_submitting() {
             chat.input_queue
                 .pending_steers
                 .push_back(pending_steer("already sent"));
+            chat.input_queue
+                .queued_user_messages
+                .push_back(UserMessage::from("follow-up").into());
         }
         let pending_steers = chat.input_queue.pending_steers.clone();
         let dir = tempfile::tempdir().unwrap();
@@ -2595,6 +2661,26 @@ async fn image_preparation_failure_restores_full_input_without_submitting() {
                 "image_preparation_restored_input",
                 normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80))
             );
+        }
+        if running {
+            // A transport recovery must preserve the pause for the failed image draft.
+            chat.pause_for_disconnect();
+            let mut input = chat.capture_thread_input_state();
+            input.as_mut().unwrap().reconnect_pending = true;
+            chat.restore_reconnected_input(input, &[pending_steers[0].client_id.clone()]);
+            chat.on_committed_user_message(
+                &[UserInput::Text {
+                    text: "already sent".into(),
+                    text_elements: Vec::new(),
+                }],
+                Some(&pending_steers[0].client_id),
+                /*from_replay*/ false,
+                "turn",
+            );
+            chat.input_queue.suppress_queue_autosend = false;
+            handle_turn_completed(&mut chat, "turn", /*duration_ms*/ None);
+            assert_eq!(chat.queued_user_message_texts(), vec!["follow-up"]);
+            assert_no_submit_op(&mut op_rx);
         }
         pixels.save(&path).unwrap();
         chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));

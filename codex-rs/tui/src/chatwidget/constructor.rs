@@ -64,8 +64,7 @@ impl ChatWidget {
         };
 
         let empty_state_animation = crate::empty_state_animation::EmptyStateAnimation::default();
-        let mut header = Self::placeholder_session_header_cell(&config);
-        history_cell::set_session_greeting(header.as_mut(), &empty_state_animation.greeting);
+        let header = Self::placeholder_session_header_cell(&config);
         let active_cell = Some(header);
 
         let current_cwd = Some(config.cwd.to_path_buf());
@@ -98,7 +97,7 @@ impl ChatWidget {
         );
         let mut widget = Self {
             empty_state_animation: std::cell::RefCell::new(empty_state_animation),
-            cyber_policy_notice: Default::default(),
+            daybreak_enabled: false,
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_target,
@@ -164,6 +163,10 @@ impl ChatWidget {
             clock_format: crate::clock_format::ClockFormat::system(),
             usage_notice_state: usage_notice::UsageNoticeState::default(),
             backend_banner_state: backend_banners::BackendBannerState::default(),
+            security_setup_request_id: uuid::Uuid::new_v4(),
+            security_setup_presented: false,
+            security_setup_identity: None,
+            security_setup_dismissed: false,
             automatic_model_switch_state: backend_banners::AutomaticModelSwitchState::default(),
             backend_banner_notice_model: None,
             luna_reserve_notice_account_id: None,

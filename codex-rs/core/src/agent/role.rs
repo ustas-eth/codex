@@ -140,21 +140,32 @@ pub(crate) async fn apply_role_cyber_preferences_on_resume(
     role_name: &str,
 ) -> Result<(), String> {
     // Older threads may refer to a role that is no longer configured.
-    if resolve_role_config(config, role_name).is_none() {
+    let Some(role) = resolve_role_config(config, role_name) else {
         return Ok(());
-    }
-    let mut role_config = config.clone();
-    apply_role_to_config(&mut role_config, Some(role_name)).await?;
-    if role_config.cyber_access_program == config.cyber_access_program
-        && role_config.cyber_access_program_by_model == config.cyber_access_program_by_model
-    {
+    };
+    let Some(config_file) = role.config_file.as_ref() else {
         return Ok(());
-    }
+    };
+    let layer = load_role_layer_toml(
+        config,
+        config_file,
+        !config.agent_roles.contains_key(role_name),
+        role_name,
+    )
+    .await
+    .map_err(|err| err.to_string())?;
+    let role_config = deserialize_config_toml_with_base(layer, &config.codex_home)
+        .map_err(|err| err.to_string())?;
     let overrides = AgentRoleOverrides {
         cyber_access_program: role_config.cyber_access_program,
         cyber_access_program_by_model: role_config.cyber_access_program_by_model,
         ..Default::default()
     };
+    if overrides.cyber_access_program.is_none()
+        && overrides.cyber_access_program_by_model.is_empty()
+    {
+        return Ok(());
+    }
     let layer = TomlValue::try_from(&overrides).map_err(|err| err.to_string())?;
     *config = role_overrides::build_next_config(config, layer, &overrides)
         .map_err(|err| err.to_string())?;
@@ -293,6 +304,7 @@ mod role_overrides {
             config.config_layer_stack.requirements().clone(),
             config.config_layer_stack.requirements_toml().clone(),
         )?
+        .with_cloud_config_binding(config.config_layer_stack.cloud_config_binding().cloned())
         .with_user_and_project_exec_policy_rules_ignored(
             config
                 .config_layer_stack

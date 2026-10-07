@@ -22,12 +22,21 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
-#[test_case::test_case("", json!({"cyber": "daybreak_blue"}); "global_default")]
-#[test_case::test_case("[cyber_access_program_by_model]\n\"gpt-5.4\" = \"auto\"\n", json!(null); "model_auto_override")]
+#[derive(Clone, Copy)]
+enum GoalCreation {
+    External,
+    NativeTool,
+}
+
+#[test_case::test_case("", json!({"cyber": "daybreak_blue"}), GoalCreation::External; "external_global_default")]
+#[test_case::test_case("[cyber_access_program_by_model]\n\"gpt-5.4\" = \"auto\"\n", json!(null), GoalCreation::External; "external_model_auto_override")]
+#[test_case::test_case("", json!({"cyber": "daybreak_blue"}), GoalCreation::NativeTool; "native_global_default")]
+#[test_case::test_case("[cyber_access_program_by_model]\n\"gpt-5.4\" = \"auto\"\n", json!(null), GoalCreation::NativeTool; "native_model_auto_override")]
 #[tokio::test]
 async fn goal_continuations_use_configured_cyber_access_program(
     model_config: &str,
     expected: serde_json::Value,
+    creation: GoalCreation,
 ) -> Result<()> {
     let server = responses::start_mock_server().await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
@@ -35,17 +44,31 @@ async fn goal_continuations_use_configured_cyber_access_program(
         .respond_with(wiremock::ResponseTemplate::new(/*s*/ 426))
         .mount(&server)
         .await;
-    // The existing empty-response breaker stops this goal after three turns.
-    let scripts = (1..=3)
-        .map(|turn| {
-            let mut final_item = responses::ev_assistant_message(&format!("final-{turn}"), "");
-            final_item["item"]["phase"] = json!("final_answer");
-            responses::sse(vec![
-                final_item,
-                responses::ev_completed(&format!("response-{turn}")),
-            ])
-        })
-        .collect();
+    // Native creation is useful activity in the initial turn; the breaker then
+    // needs three additional empty turns. An externally set goal starts empty.
+    let completed_turns = match creation {
+        GoalCreation::External => 3,
+        GoalCreation::NativeTool => 4,
+    };
+    let mut scripts = Vec::new();
+    if matches!(creation, GoalCreation::NativeTool) {
+        scripts.push(responses::sse(vec![
+            responses::ev_function_call(
+                "create-goal",
+                "create_goal",
+                &json!({"objective": "Finish the fixture task"}).to_string(),
+            ),
+            responses::ev_completed("create-goal-response"),
+        ]));
+    }
+    scripts.extend((1..=completed_turns).map(|turn| {
+        let mut final_item = responses::ev_assistant_message(&format!("final-{turn}"), "");
+        final_item["item"]["phase"] = json!("final_answer");
+        responses::sse(vec![
+            final_item,
+            responses::ev_completed(&format!("response-{turn}")),
+        ])
+    }));
     let requests = responses::mount_sse_sequence(&server, scripts).await;
     let home = TempDir::new()?;
     std::fs::write(
@@ -70,14 +93,25 @@ async fn goal_continuations_use_configured_cyber_access_program(
         .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let ThreadStartResponse { thread, .. } = app.read_response(request).await?;
-    let request = app
-        .send_raw_request(
-            "thread/goal/set",
-            Some(json!({"threadId": thread.id, "objective": "Finish the fixture task"})),
-        )
-        .await?;
-    let _: ThreadGoalSetResponse = app.read_response(request).await?;
-    for _ in 0..3 {
+    match creation {
+        GoalCreation::External => {
+            let request = app
+                .send_raw_request(
+                    "thread/goal/set",
+                    Some(json!({"threadId": thread.id, "objective": "Finish the fixture task"})),
+                )
+                .await?;
+            let _: ThreadGoalSetResponse = app.read_response(request).await?;
+        }
+        GoalCreation::NativeTool => {
+            let request = app.send_raw_request(
+                "turn/start",
+                Some(json!({"threadId": thread.id, "input": [{"type": "text", "text": "Create a goal to finish the fixture task, then continue."}]})),
+            ).await?;
+            let _: serde_json::Value = app.read_response(request).await?;
+        }
+    }
+    for _ in 0..completed_turns {
         let completed: TurnCompletedNotification = timeout(
             Duration::from_secs(/*secs*/ 30),
             app.read_notification("turn/completed"),
@@ -92,7 +126,22 @@ async fn goal_continuations_use_configured_cyber_access_program(
             .iter()
             .map(|request| request.body_json()["access_programs"].clone())
             .collect::<Vec<_>>(),
-        vec![expected; 3]
+        vec![
+            expected;
+            if matches!(creation, GoalCreation::NativeTool) {
+                completed_turns + 1
+            } else {
+                completed_turns
+            }
+        ]
+    );
+    let request = app
+        .send_raw_request("thread/goal/get", Some(json!({"threadId": thread.id})))
+        .await?;
+    let result: ThreadGoalGetResponse = app.read_response(request).await?;
+    assert_eq!(
+        result.goal.expect("created goal").status,
+        ThreadGoalStatus::Blocked
     );
     Ok(())
 }

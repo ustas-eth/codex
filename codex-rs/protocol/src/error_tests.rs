@@ -40,6 +40,7 @@ async fn codex_err_debug_preserves_legacy_shape() {
 fn retryability_preserves_error_details_distinctions() {
     let errors = [
         (CodexErr::ServerOverloaded, false),
+        (CodexErr::new(CodexErrorDetails::ContentFilter), true),
         (
             CodexErr::new(CodexErrorDetails::RateLimitExceeded("retry later".into())),
             true,
@@ -165,7 +166,7 @@ fn usage_limit_reached_error_formats_plus_plan() {
     };
     assert_eq!(
         err.to_string(),
-        "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later."
+        "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again later."
     );
 }
 
@@ -174,7 +175,7 @@ fn usage_limit_reached_error_formats_rate_limit_reached_types() {
     let cases = [
         (
             RateLimitReachedType::RateLimitReached,
-            "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.",
+            "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again later.",
         ),
         (
             RateLimitReachedType::WorkspaceOwnerCreditsDepleted,
@@ -494,7 +495,7 @@ fn usage_limit_reached_error_formats_pro_plan_with_reset() {
             rate_limit_reached_type: None,
         };
         let expected = format!(
-            "You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
+            "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at {expected_time}."
         );
         assert_eq!(err.to_string(), expected);
     });
@@ -516,8 +517,7 @@ fn usage_limit_reached_error_hides_upsell_for_non_codex_limit_name() {
                 ..rate_limit_snapshot()
             })),
             promo_message: Some(
-                "Visit https://chatgpt.com/codex/settings/usage to purchase more credits"
-                    .to_string(),
+                "Visit https://chatgpt.com/settings/usage to purchase more credits".to_string(),
             ),
             rate_limit_reached_type: None,
         };
@@ -688,7 +688,7 @@ fn usage_limit_reached_includes_hours_and_minutes() {
             rate_limit_reached_type: None,
         };
         let expected = format!(
-            "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at {expected_time}."
+            "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at {expected_time}."
         );
         assert_eq!(err.to_string(), expected);
     });

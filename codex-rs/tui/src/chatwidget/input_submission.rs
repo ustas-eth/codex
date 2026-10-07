@@ -452,7 +452,6 @@ impl ChatWidget {
             service_tier,
             /*final_output_json_schema*/ None,
             collaboration_mode,
-            /*personality*/ None,
         );
         let submitted_message = UserMessage {
             text,
@@ -489,6 +488,7 @@ impl ChatWidget {
         self.note_realtime_typed_input(&submitted_message.text);
         if render_in_history {
             self.input_queue.user_turn_pending_start = true;
+            self.input_queue.pending_user_message_client_id = Some(client_user_message_id.clone());
         }
 
         // Persist the submitted text to cross-session message history. Mentions are encoded into

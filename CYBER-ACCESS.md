@@ -7,20 +7,23 @@ goal continuations, and native subagents.
 Access still depends on your account entitlement and the selected model. These
 settings apply to the native OpenAI provider with ChatGPT authentication.
 
-Based on Codex 0.159.1. Upstream now preserves the model and access-program pair
-during compaction after a model switch; this branch still supplies the
-configuration defaults described below.
+Based on Codex 0.161.0. Upstream provides Daybreak controls in TUI/exec behind
+`features.cli_daybreak`, plus explicit per-turn app-server selection. This branch
+adds server-side defaults for turns that arrive without an explicit choice,
+including automatic goal work. Compaction and API-key access-program policy use
+the upstream implementation.
 
 ## Configure
 
-For example, request Daybreak Blue by default while leaving Astra on automatic
-selection. Place this in `~/.codex/config.toml`, with the default at the top level:
+For example, request Daybreak Blue by default while leaving selected models on
+automatic selection. Place this in `~/.codex/config.toml`, with the default at the top level:
 
 ```toml
 cyber_access_program = "daybreak_blue"
 
 [cyber_access_program_by_model]
 "gpt-6-astra" = "auto"
+"gpt-6.1-sol" = "auto"
 ```
 
 Available values: `auto`, `standard`, `daybreak_blue`, and `daybreak_red`. Model
@@ -32,6 +35,16 @@ role files. An explicit `turn/start.cyberAccessProgram` takes precedence over
 configuration. Otherwise, the exact-model setting takes precedence over the
 default. A profile's default does not erase model-specific entries inherited
 from other configuration layers; override those entries individually when needed.
+
+These defaults are independent of `features.cli_daybreak`. When native CLI
+controls are enabled, their per-turn selection takes precedence, including
+`standard` when the saved Daybreak preference is off. `daybreak = true` is a
+client preference, not a server-side default for automatic goal turns.
+
+Configured defaults apply to ChatGPT authentication. API-key turns retain
+upstream behavior: an explicit program requires the
+`features.api_key_cyber_access_programs` opt-in. A subscription default does not
+implicitly opt an API-key session into that feature.
 
 Defaults are evaluated for each new turn. See the
 [app-server reference](codex-rs/app-server/README.md#initial-daybreak-choice-experimental)
@@ -53,10 +66,10 @@ cd codex-cyber
 The branch sets `[workspace.package].version` in `codex-rs/Cargo.toml` to:
 
 ```toml
-version = "0.159.1+cyber.1"
+version = "0.161.0+cyber.1"
 ```
 
-This identifies the patched build based on upstream tag `rust-v0.159.1`.
+This identifies the patched build based on upstream tag `rust-v0.161.0`.
 Codex sends its compiled version to the backend; leaving it at
 `0.0.0` can cause compatible models to be rejected with a misleading
 ChatGPT-account error. Setting only the package builder's `--package-version`
@@ -91,7 +104,7 @@ Run the package directly:
 ./codex-cyber-package/bin/codex
 ```
 
-The reported version should be `0.159.1+cyber.1`. You can move the complete
+The reported version should be `0.161.0+cyber.1`. You can move the complete
 package directory to a permanent location and put a symlink to its `bin/codex`
 on your PATH under a distinct name such as `codex-cyber`.
 
@@ -109,8 +122,9 @@ use the same Codex configuration and state by default.
 
 ## Verification
 
-Regression tests cover configuration precedence, model switches, goal
-continuations, subagent inheritance, and compaction with the selected program.
+Regression tests cover configuration precedence, model switches, native goal
+creation and continuation, subagent inheritance, API-key policy, and compaction
+with the selected program.
 Run the focused tests when updating the upstream base:
 
 ```bash

@@ -336,6 +336,14 @@
         }
       ]
     },
+    "AsyncClassifierMode": {
+      "description": "Async classifier experiment, resolved once for each parent task.",
+      "enum": [
+        "snapshot",
+        "conversation"
+      ],
+      "type": "string"
+    },
     "AuthCredentialsStoreMode": {
       "description": "Determine where Codex should store CLI auth credentials.",
       "oneOf": [
@@ -397,6 +405,16 @@
             }
           ],
           "description": "Controls whether circuit-breaker interruptions include a structured error. Strict mode writes structured errors that older clients may not recognize when reading shared history. Defaults to `default`."
+        },
+        "conversation_history_max_output_tokens": {
+          "description": "Maximum estimated tokens per Guardian history-tool response, before the standard serialization allowance. Defaults to 4,000; stricter parent tool limits still apply.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "experimental_conversation_history_prompt": {
+          "description": "Experimental replacement for the history-retrieval instructions when history tools and Apps are enabled. Omitted or blank values use the built-in prompt.",
+          "type": "string"
         },
         "experimental_policy_template": {
           "description": "Experimental full Guardian prompt template containing the tenant policy placeholder.",
@@ -703,6 +721,9 @@
             "analytics_plan_history": {
               "type": "boolean"
             },
+            "api_key_cyber_access_programs": {
+              "type": "boolean"
+            },
             "api_key_model_discovery": {
               "type": "boolean"
             },
@@ -746,6 +767,9 @@
             "bedrock_setup_wizard": {
               "type": "boolean"
             },
+            "browser_annotation_api": {
+              "type": "boolean"
+            },
             "browser_use": {
               "type": "boolean"
             },
@@ -756,6 +780,9 @@
               "type": "boolean"
             },
             "chronicle": {
+              "type": "boolean"
+            },
+            "cli_daybreak": {
               "type": "boolean"
             },
             "code_mode": {
@@ -875,6 +902,9 @@
             "guardian_approval": {
               "type": "boolean"
             },
+            "guardian_conversation_history_tools": {
+              "type": "boolean"
+            },
             "guardian_enhanced_node_repl_transcripts": {
               "type": "boolean"
             },
@@ -885,6 +915,9 @@
               "type": "boolean"
             },
             "guardian_reuse_parent_compaction": {
+              "type": "boolean"
+            },
+            "guardian_root_handoff_context": {
               "type": "boolean"
             },
             "guardianv2": {
@@ -920,6 +953,9 @@
             "in_app_updates": {
               "type": "boolean"
             },
+            "in_app_voice": {
+              "type": "boolean"
+            },
             "instant_interrupt": {
               "type": "boolean"
             },
@@ -938,6 +974,9 @@
             "local_thread_store_shared_compression": {
               "type": "boolean"
             },
+            "login_shell_package_path": {
+              "type": "boolean"
+            },
             "mcp_2026_07_28": {
               "type": "boolean"
             },
@@ -951,6 +990,9 @@
               "type": "boolean"
             },
             "mentions_v2": {
+              "type": "boolean"
+            },
+            "model_catalog_in_context": {
               "type": "boolean"
             },
             "multi_agent": {
@@ -1832,6 +1874,20 @@
       "additionalProperties": false,
       "description": "User-configurable prompt, approval, and context settings for Guardian v2.",
       "properties": {
+        "async_classifier_conversation_token_limit": {
+          "description": "Reset retained async history when the next request exceeds this token estimate. Defaults to 100,000. Fresh requests remain subject to the model's input limit.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "async_classifier_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AsyncClassifierMode"
+            }
+          ],
+          "description": "Classifier experiment override. Otherwise use the model default, then snapshots."
+        },
         "classifier_instructions": {
           "type": "string"
         },
@@ -2543,6 +2599,24 @@
       ],
       "type": "string"
     },
+    "MicrophoneChannels": {
+      "anyOf": [
+        {
+          "format": "uint16",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        {
+          "items": {
+            "format": "uint16",
+            "minimum": 1.0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "Selected microphone inputs. Scalars preserve existing single-channel configuration."
+    },
     "ModelAvailabilityNuxConfig": {
       "additionalProperties": {
         "format": "uint32",
@@ -2708,7 +2782,7 @@
         },
         "requires_openai_auth": {
           "default": false,
-          "description": "Does this provider require an OpenAI API Key or ChatGPT login token? If true, user is presented with login screen on first run, and login preference and token/key are stored in auth.json. If false (which is the default), login screen is skipped, and API key (if needed) comes from the \"env_key\" environment variable.",
+          "description": "Does this provider require an OpenAI API key or ChatGPT login token? If true, the user is presented with a login screen on first run, and credentials are stored using the backend selected by `cli_auth_credentials_store`. If false (the default), the login screen is skipped, and the API key (if needed) comes from the environment variable specified by `env_key`.",
           "type": "boolean"
         },
         "stream_idle_timeout_ms": {
@@ -2788,6 +2862,14 @@
         "message_board_in_memory": {
           "description": "Keep the message board in memory for a training session, including ephemeral sessions.",
           "type": "boolean"
+        },
+        "message_board_remote": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RemoteMessageBoardConfigToml"
+            }
+          ],
+          "description": "Use a session-scoped remote board instead of local storage."
         },
         "min_wait_timeout_ms": {
           "format": "int64",
@@ -3511,14 +3593,6 @@
           },
           "type": "array"
         },
-        "ema_auth": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/PluginMcpServerEmaAuthConfig"
-            }
-          ],
-          "description": "Host-configured EMA registration; the plugin still owns its endpoint."
-        },
         "enabled": {
           "default": true,
           "description": "When `false`, Codex skips initializing this plugin MCP server.",
@@ -3539,39 +3613,6 @@
           "type": "object"
         }
       },
-      "type": "object"
-    },
-    "PluginMcpServerEmaAuthConfig": {
-      "additionalProperties": false,
-      "description": "Resource registration applied through an existing per-plugin policy overlay. The enterprise IdP is selected separately by trusted host configuration.",
-      "properties": {
-        "authorization_server_issuer": {
-          "type": "string"
-        },
-        "client_id": {
-          "type": "string"
-        },
-        "resource": {
-          "type": "string"
-        },
-        "scopes": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "url": {
-          "description": "Exact plugin endpoint approved by the host; never overrides the declaration.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "authorization_server_issuer",
-        "client_id",
-        "resource",
-        "url"
-      ],
       "type": "object"
     },
     "ProfileTui": {
@@ -3782,6 +3823,14 @@
         "microphone": {
           "type": "string"
         },
+        "microphone_channel": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MicrophoneChannels"
+            }
+          ],
+          "description": "One-based microphone channels to mix; unset mixes all input channels."
+        },
         "speaker": {
           "type": "string"
         }
@@ -3876,6 +3925,27 @@
           "type": "string"
         }
       ]
+    },
+    "RemoteMessageBoardConfigToml": {
+      "additionalProperties": false,
+      "description": "Connection to a board provisioned by the research host.",
+      "properties": {
+        "bearer_token": {
+          "description": "Board credential supplied directly by a runtime config override.",
+          "type": "string"
+        },
+        "bearer_token_env_var": {
+          "description": "Read the credential from this environment variable instead of bearer_token.",
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
     },
     "ResumeCwdMode": {
       "description": "Working directory to use when resuming or forking a session.",
@@ -4435,6 +4505,7 @@
             "agents": {
               "archive": null,
               "delete": null,
+              "fork": null,
               "hide": null,
               "new_task": null,
               "new_worktree": null,
@@ -4788,6 +4859,14 @@
             }
           ],
           "description": "Permanently delete the selected task and its child agents after confirmation."
+        },
+        "fork": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Fork the selected conversation and open the new session."
         },
         "hide": {
           "allOf": [
@@ -5373,6 +5452,7 @@
           "default": {
             "archive": null,
             "delete": null,
+            "fork": null,
             "hide": null,
             "new_task": null,
             "new_worktree": null,
@@ -6691,6 +6771,10 @@
       "description": "Exact model-id overrides for the default cyber access program. `auto` leaves selection to the backend, including when a global default is set.",
       "type": "object"
     },
+    "daybreak": {
+      "description": "Default Daybreak preference for new threads and non-interactive turns.",
+      "type": "boolean"
+    },
     "default_permissions": {
       "description": "Default permissions profile to apply. Names starting with `:` refer to built-in profiles; other names are resolved from the `[permissions]` table.",
       "type": "string"
@@ -6759,6 +6843,9 @@
         "analytics_plan_history": {
           "type": "boolean"
         },
+        "api_key_cyber_access_programs": {
+          "type": "boolean"
+        },
         "api_key_model_discovery": {
           "type": "boolean"
         },
@@ -6802,6 +6889,9 @@
         "bedrock_setup_wizard": {
           "type": "boolean"
         },
+        "browser_annotation_api": {
+          "type": "boolean"
+        },
         "browser_use": {
           "type": "boolean"
         },
@@ -6812,6 +6902,9 @@
           "type": "boolean"
         },
         "chronicle": {
+          "type": "boolean"
+        },
+        "cli_daybreak": {
           "type": "boolean"
         },
         "code_mode": {
@@ -6931,6 +7024,9 @@
         "guardian_approval": {
           "type": "boolean"
         },
+        "guardian_conversation_history_tools": {
+          "type": "boolean"
+        },
         "guardian_enhanced_node_repl_transcripts": {
           "type": "boolean"
         },
@@ -6941,6 +7037,9 @@
           "type": "boolean"
         },
         "guardian_reuse_parent_compaction": {
+          "type": "boolean"
+        },
+        "guardian_root_handoff_context": {
           "type": "boolean"
         },
         "guardianv2": {
@@ -6976,6 +7075,9 @@
         "in_app_updates": {
           "type": "boolean"
         },
+        "in_app_voice": {
+          "type": "boolean"
+        },
         "instant_interrupt": {
           "type": "boolean"
         },
@@ -6994,6 +7096,9 @@
         "local_thread_store_shared_compression": {
           "type": "boolean"
         },
+        "login_shell_package_path": {
+          "type": "boolean"
+        },
         "mcp_2026_07_28": {
           "type": "boolean"
         },
@@ -7007,6 +7112,9 @@
           "type": "boolean"
         },
         "mentions_v2": {
+          "type": "boolean"
+        },
+        "model_catalog_in_context": {
           "type": "boolean"
         },
         "multi_agent": {

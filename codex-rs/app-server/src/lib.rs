@@ -78,11 +78,12 @@ use tracing::info;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
+use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
-const SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY: &str = "Codex rebuilt its local database.";
+const SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY: &str = "Codex rebuilt its local database";
 
 fn is_unsupported_untrusted_approval_policy_error(err: &std::io::Error) -> bool {
     err.get_ref().is_some_and(
@@ -163,6 +164,10 @@ enum LogFormat {
 }
 
 type StderrLogLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
+
+fn stderr_span_events() -> FmtSpan {
+    FmtSpan::NEW | FmtSpan::CLOSE
+}
 
 /// Control-plane messages from the processor/transport side to the outbound router task.
 ///
@@ -703,16 +708,19 @@ pub async fn run_main_with_transport_options(
     // Install a simple subscriber so `tracing` output is visible. Users can
     // control the log level with `RUST_LOG` and switch to JSON logs with
     // `LOG_FORMAT=json`.
+    // SQLx enters the caller's span for each command. Skip enter/exit records
+    // that can block its worker on stderr while holding a write transaction.
+    // Preserve span boundaries, busy/idle timings, and explicit events.
     let stderr_fmt: StderrLogLayer = match log_format_from_env() {
         LogFormat::Json => tracing_subscriber::fmt::layer()
             .json()
             .with_writer(std::io::stderr)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+            .with_span_events(stderr_span_events())
             .with_filter(EnvFilter::from_default_env())
             .boxed(),
         LogFormat::Default => tracing_subscriber::fmt::layer()
             .with_writer(std::io::stderr)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+            .with_span_events(stderr_span_events())
             .with_filter(EnvFilter::from_default_env())
             .boxed(),
     };
@@ -1371,74 +1379,71 @@ struct StateDbInitResult {
 async fn init_sqlite_state_db_with_fresh_start_on_corruption(
     config: &Config,
 ) -> anyhow::Result<StateDbInitResult> {
-    let mut attempted_backups = HashSet::new();
-    let mut recovered_databases = Vec::new();
-    loop {
-        let err = match rollout_state_db::try_init(config).await {
-            Ok(state_db) => {
-                let recovery_notice = sqlite_recovery_notice(&recovered_databases);
-                if recovery_notice.is_some() {
-                    emit_state_db_backup_warning(SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY);
-                    for recovered_database in &recovered_databases {
-                        emit_state_db_backup_warning(&format!(
-                            "Database path: {}",
-                            recovered_database.database_path
-                        ));
-                        emit_state_db_backup_warning(&format!(
-                            "Backup folder: {}",
-                            recovered_database.backup_folder
-                        ));
-                    }
-                }
-                return Ok(StateDbInitResult {
-                    state_db: Some(state_db),
-                    recovery_notice,
-                });
+    let (result, backups) = codex_state::collect_runtime_db_backups(async {
+        let mut attempted_backups = HashSet::new();
+        loop {
+            let err = match rollout_state_db::try_init(config).await {
+                Ok(state_db) => return Ok(state_db),
+                Err(err) => err,
+            };
+            let database_path = codex_state::runtime_db_path_for_corruption_error(&err)
+                .unwrap_or_else(|| config.sqlite_config().state_db_path());
+            if !codex_state::is_sqlite_corruption_error(&err)
+                && !sqlite_home_is_blocking_file(database_path.as_path())
+            {
+                return Err(err);
             }
-            Err(err) => err,
-        };
-        let database_path = codex_state::runtime_db_path_for_corruption_error(&err)
-            .unwrap_or_else(|| config.sqlite_config().state_db_path());
-        if !codex_state::is_sqlite_corruption_error(&err)
-            && !sqlite_home_is_blocking_file(database_path.as_path())
-        {
-            return Err(err);
-        }
 
-        if !attempted_backups.insert(database_path.clone()) {
-            return Err(anyhow::anyhow!(
-                "failed to initialize sqlite state runtime after moving damaged database file into a backup folder: {err}"
-            ));
-        }
+            if !attempted_backups.insert(database_path.clone()) {
+                return Err(anyhow::anyhow!(
+                    "failed to initialize sqlite state runtime after moving damaged database file into a backup folder: {err}"
+                ));
+            }
 
-        let original_error = err.to_string();
-        emit_state_db_backup_warning(&format!(
-            "Codex local database at {} appears damaged. Moving it into a backup folder so the app server can rebuild it from saved data.",
-            database_path.display()
-        ));
-        let backups = codex_state::backup_runtime_db_for_fresh_start(database_path.as_path())
-            .await
-            .map_err(|backup_err| {
-                anyhow::anyhow!(
-                    "failed to move damaged sqlite state database files into a backup folder: {backup_err}; original error: {original_error}"
-                )
-            })?;
-        for backup in &backups {
+            let original_error = err.to_string();
             emit_state_db_backup_warning(&format!(
-                "Moved damaged Codex local database file {} to {}",
-                backup.original_path.display(),
-                backup.backup_path.display()
+                "Codex local database at {} appears damaged. Moving it into a backup folder so the app server can rebuild it from saved data.",
+                database_path.display()
             ));
+            let backups = codex_state::backup_runtime_db_for_fresh_start(database_path.as_path())
+                .await
+                .map_err(|backup_err| {
+                    anyhow::anyhow!(
+                        "failed to move damaged sqlite state database files into a backup folder: {backup_err}; original error: {original_error}"
+                    )
+                })?;
+            for backup in &backups {
+                emit_state_db_backup_warning(&format!(
+                    "Moved damaged Codex local database file {} to {}",
+                    backup.original_path.display(),
+                    backup.backup_path.display()
+                ));
+            }
         }
-        if let Some(first_backup) = backups.first()
-            && let Some(backup_folder) = first_backup.backup_path.parent()
+    })
+    .await;
+    let state_db = result?;
+    let mut recovered_databases = Vec::new();
+    let mut backup_folders = HashSet::new();
+    for backup in backups {
+        if let Some(folder) = backup.backup_path.parent()
+            && backup_folders.insert(folder.to_path_buf())
         {
             recovered_databases.push(RecoveredSqliteDatabase {
-                database_path: first_backup.original_path.display().to_string(),
-                backup_folder: backup_folder.display().to_string(),
+                database_path: backup.original_path.display().to_string(),
+                backup_folder: folder.display().to_string(),
             });
         }
     }
+    let recovery_notice = sqlite_recovery_notice(&recovered_databases);
+    if let Some(notice) = &recovery_notice {
+        emit_state_db_backup_warning(SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY);
+        emit_state_db_backup_warning(&notice.details);
+    }
+    Ok(StateDbInitResult {
+        state_db: Some(state_db),
+        recovery_notice,
+    })
 }
 
 fn sqlite_home_is_blocking_file(database_path: &Path) -> bool {
@@ -1465,7 +1470,11 @@ fn sqlite_recovery_notice(
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    Some(SqliteRecoveryNotice { details })
+    Some(SqliteRecoveryNotice {
+        details: format!(
+            "Damaged local databases were rebuilt. Saved conversations remain in rollout files and can restore the thread list and history. Some database-only metadata may be unavailable. The original database files were preserved at the backup locations below.\n\n{details}"
+        ),
+    })
 }
 
 fn emit_state_db_backup_warning(message: &str) {
@@ -1523,6 +1532,10 @@ fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransp
         | AppServerTransport::Off => AppServerRpcTransport::Websocket,
     }
 }
+
+#[cfg(test)]
+#[path = "stderr_logging_tests.rs"]
+mod stderr_logging_tests;
 
 #[cfg(test)]
 mod tests {

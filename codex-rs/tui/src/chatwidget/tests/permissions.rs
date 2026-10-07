@@ -60,7 +60,13 @@ async fn permission_discovery_uses_server_catalog_for_remote_custom_selection() 
         }))
         .unwrap(),
     );
-    chat.request_permission_profiles();
+    // Conflicting local availability must not disable server-provided choices.
+    chat.config.config_layer_stack = requirements_stack(codex_config::ConfigRequirementsToml {
+        allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
+        ..Default::default()
+    });
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_permissions_popup();
     let request_id = chat.permission_popup_request_id.unwrap();
     rx.try_recv().unwrap();
     assert_chatwidget_snapshot!(
@@ -79,16 +85,6 @@ async fn permission_discovery_uses_server_catalog_for_remote_custom_selection() 
         AppEvent::SelectPermissionProfile(PermissionProfileSelection { profile_id, .. })
             if profile_id == "server-only"
     ));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
-    chat.open_permissions_popup();
-    rx.try_recv().unwrap();
-    let request_id = chat.permission_popup_request_id.unwrap();
-    let mut legacy = Discovery::local(&chat.config);
-    legacy.explicit_profile_mode = false;
-    chat.on_permission_profiles_loaded(request_id, Ok(legacy));
-    let actual = render_bottom_popup(&chat, /*width*/ 110);
-    chat.open_legacy_permissions_popup();
-    assert_eq!(actual, render_bottom_popup(&chat, /*width*/ 110));
 }
 
 #[tokio::test]
@@ -265,7 +261,14 @@ async fn profile_permissions_selection_popup_with_disallowed_full_access_snapsho
         ..Default::default()
     });
 
-    chat.open_permission_profiles_popup(Discovery::local(&chat.config));
+    let mut discovery = Discovery::local(&chat.config);
+    discovery
+        .profiles
+        .iter_mut()
+        .find(|profile| profile.id == ":danger-full-access")
+        .unwrap()
+        .allowed = false;
+    chat.open_permission_profiles_popup(discovery);
 
     assert_chatwidget_snapshot!(
         "profile_permissions_selection_popup_with_disallowed_full_access",
@@ -571,11 +574,36 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
     );
 }
 
-#[cfg(target_os = "windows")]
 #[tokio::test]
 async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
+    let cwd = tempfile::tempdir().unwrap();
+    chat.config = crate::legacy_core::config::ConfigBuilder::default()
+        .codex_home(chat.config.codex_home.to_path_buf())
+        .loader_overrides(codex_config::LoaderOverrides::without_managed_config_for_tests())
+        .harness_overrides(crate::legacy_core::config::ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .unwrap();
+    assert!(chat.config.config_layer_stack.is_projectless());
+    let approval = codex_protocol::protocol::AskForApproval::Granular(
+        codex_protocol::protocol::GranularApprovalConfig {
+            sandbox_approval: false,
+            rules: false,
+            skill_approval: false,
+            request_permissions: true,
+            mcp_elicitations: true,
+        },
+    );
+    chat.config
+        .permissions
+        .approval_policy
+        .set(approval)
+        .unwrap();
     chat.set_windows_sandbox_mode(/*mode*/ None);
 
     chat.maybe_prompt_windows_sandbox_enable(/*show_now*/ true);
@@ -597,6 +625,15 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
         popup.contains("Quit"),
         "expected startup prompt to offer quit action: {popup}"
     );
+    assert_chatwidget_snapshot!("projectless_windows_sandbox_setup", popup);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let preset = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::BeginWindowsSandboxElevatedSetup { preset, .. } => Some(preset),
+            _ => None,
+        })
+        .expect("sandbox setup event");
+    assert_eq!(preset.approval, approval);
 }
 
 #[cfg(target_os = "windows")]
@@ -732,6 +769,7 @@ async fn required_windows_sandbox_setup_defers_configured_initial_prompt() {
         create_initial_user_message(Some(initial_prompt.clone()), Vec::new(), Vec::new());
 
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,
@@ -749,7 +787,6 @@ async fn required_windows_sandbox_setup_defers_configured_initial_prompt() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -962,7 +999,6 @@ async fn approvals_popup_navigation_skips_disabled() {
             ev,
             AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::OnRequest),
-                personality: None,
                 ..
             })
         )),
@@ -973,7 +1009,6 @@ async fn approvals_popup_navigation_skips_disabled() {
             ev,
             AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::Never),
-                personality: None,
                 ..
             })
         )),
@@ -1176,6 +1211,7 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
         .set_enabled(Feature::GuardianApproval, /*enabled*/ true);
 
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,
@@ -1193,15 +1229,19 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
     });
 
     chat.open_permissions_popup();
+    chat.on_permission_profiles_loaded(
+        chat.permission_popup_request_id.unwrap(),
+        Ok(Discovery::local(&chat.config)),
+    );
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
+    assert_chatwidget_snapshot!("permissions_unnamed_server_profile", popup);
     assert!(
         popup.contains("Approve for me (current)"),
         "expected Approve for me to be current after SessionConfigured sync: {popup}"
@@ -1225,6 +1265,7 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
     let permission_profile = app_server_workspace_write_profile(extra_root);
 
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,
@@ -1242,13 +1283,16 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
     });
 
     chat.open_permissions_popup();
+    chat.on_permission_profiles_loaded(
+        chat.permission_popup_request_id.unwrap(),
+        Ok(Discovery::local(&chat.config)),
+    );
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
@@ -1356,7 +1400,6 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             summary: None,
             service_tier: None,
             collaboration_mode: None,
-            personality: None,
         }
     );
 
