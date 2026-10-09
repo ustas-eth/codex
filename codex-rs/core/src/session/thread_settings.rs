@@ -13,10 +13,33 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
+use codex_thread_store::StoredThread;
+use codex_thread_store::ThreadMetadataPatch;
+use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use tokio::sync::SemaphorePermit;
 
 impl Session {
+    /// Commit metadata and its live preference together, without changing the active turn.
+    pub(crate) async fn update_thread_metadata(
+        &self,
+        patch: ThreadMetadataPatch,
+        include_archived: bool,
+    ) -> ThreadStoreResult<StoredThread> {
+        let _settings_guard = acquire_persistence_lock(self).await;
+        let live_thread = self
+            .live_thread_for_persistence("update thread metadata")
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
+        let updates_daybreak = patch.daybreak_enabled.is_some();
+        let thread = live_thread.update_metadata(patch, include_archived).await?;
+        if updates_daybreak {
+            self.state.lock().await.daybreak_preference = thread.daybreak_enabled;
+        }
+        Ok(thread)
+    }
+
     /// Captures and flushes current settings under the shared persistence permit.
     pub(crate) async fn checkpoint_thread_settings(&self) -> ThreadStoreResult<()> {
         let _settings_guard = acquire_persistence_lock(self).await;

@@ -62,6 +62,7 @@ impl LocalSettings {
                 rendering: config.tui_rendering,
                 show_tooltips: config.show_tooltips,
                 show_server_version_notice: config.tui_show_server_version_notice,
+                show_safety_buffering: config.tui_show_safety_buffering,
                 auto_recap: config.tui_auto_recap,
                 disable_paste_burst: Some(config.disable_paste_burst),
                 vim_mode_default: config.tui_vim_mode_default,

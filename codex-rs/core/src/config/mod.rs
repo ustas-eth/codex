@@ -795,6 +795,9 @@ pub struct Config {
     /// Show a TUI notice when the connected app server is an older stable release.
     pub tui_show_server_version_notice: bool,
 
+    /// Show the informational safety-buffering banner and retry menu in the TUI.
+    pub tui_show_safety_buffering: bool,
+
     /// Generate automatic TUI recaps. Manual `/recap` remains available when disabled.
     pub tui_auto_recap: bool,
 
@@ -4540,6 +4543,11 @@ impl Config {
                 .tui
                 .as_ref()
                 .map(|t| t.show_server_version_notice)
+                .unwrap_or(true),
+            tui_show_safety_buffering: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.show_safety_buffering)
                 .unwrap_or(true),
             tui_auto_recap: cfg.tui.as_ref().map(|t| t.auto_recap).unwrap_or(/*default*/ true),
             model_availability_nux: cfg

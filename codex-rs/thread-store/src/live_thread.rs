@@ -339,6 +339,23 @@ impl LiveThread {
             .await
     }
 
+    /// Read a saved or staged choice without materializing an unused local thread.
+    pub async fn daybreak_preference(&self) -> ThreadStoreResult<Option<bool>> {
+        if let Some(local_store) = self
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+        {
+            local_store.daybreak_preference(self.thread_id).await
+        } else {
+            self.read_thread(
+                /*include_archived*/ true, /*include_history*/ false,
+            )
+            .await
+            .map(|thread| thread.daybreak_enabled)
+        }
+    }
+
     pub async fn update_memory_mode(
         &self,
         mode: ThreadMemoryMode,

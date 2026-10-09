@@ -923,13 +923,9 @@ impl CodexThread {
         patch: ThreadMetadataPatch,
         include_archived: bool,
     ) -> ThreadStoreResult<StoredThread> {
-        let live_thread = self
-            .session
-            .live_thread_for_persistence("update thread metadata")
-            .map_err(|err| ThreadStoreError::Internal {
-                message: err.to_string(),
-            })?;
-        live_thread.update_metadata(patch, include_archived).await
+        self.session
+            .update_thread_metadata(patch, include_archived)
+            .await
     }
 
     /// Appends rollout items through the live thread so derived metadata stays in sync.

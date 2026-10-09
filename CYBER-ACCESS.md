@@ -7,11 +7,10 @@ goal continuations, and native subagents.
 Access still depends on your account entitlement and the selected model. These
 settings apply to the native OpenAI provider with ChatGPT authentication.
 
-Based on Codex 0.161.0. Upstream provides Daybreak controls in TUI/exec behind
+Based on Codex 0.162.0. Upstream provides Daybreak controls in TUI/exec behind
 `features.cli_daybreak`, plus explicit per-turn app-server selection. This branch
-adds server-side defaults for turns that arrive without an explicit choice,
-including automatic goal work. Compaction and API-key access-program policy use
-the upstream implementation.
+adds server-side defaults and connects the saved thread choice to automatic goal
+work. Compaction and API-key access-program policy use the upstream implementation.
 
 ## Configure
 
@@ -32,14 +31,13 @@ names are exact matches. `auto` leaves the program field out of the request;
 
 These settings also work in named `~/.codex/<name>.config.toml` profiles and agent
 role files. An explicit `turn/start.cyberAccessProgram` takes precedence over
-configuration. Otherwise, the exact-model setting takes precedence over the
-default. A profile's default does not erase model-specific entries inherited
-from other configuration layers; override those entries individually when needed.
+the saved thread choice, then configuration. Otherwise, the exact-model setting
+takes precedence over the default. A profile's default does not erase
+model-specific entries inherited from other configuration layers; override those
+entries individually when needed.
 
-These defaults are independent of `features.cli_daybreak`. When native CLI
-controls are enabled, their per-turn selection takes precedence, including
-`standard` when the saved Daybreak preference is off. `daybreak = true` is a
-client preference, not a server-side default for automatic goal turns.
+These defaults are independent of `features.cli_daybreak`. Native CLI controls
+send a per-turn selection, which takes precedence over server defaults.
 
 Configured defaults apply to ChatGPT authentication. API-key turns retain
 upstream behavior: an explicit program requires the
@@ -49,6 +47,43 @@ implicitly opt an API-key session into that feature.
 Defaults are evaluated for each new turn. See the
 [app-server reference](codex-rs/app-server/README.md#initial-daybreak-choice-experimental)
 for inheritance, recovery, and active-turn behavior.
+
+## Change a running thread's preference
+
+Enable the native `/daybreak` control with `--enable cli_daybreak`, or set
+`cli_daybreak = true` under `[features]`. The command saves the current thread's
+choice and the client's default for future threads. Account and model
+availability still apply.
+
+With this branch running the app server, the saved thread choice also applies to
+automatic goal continuations. Off requests `standard`; on selects the model's
+advertised Daybreak program, or requests Blue if none is advertised.
+Unsupported requests can still be rejected by the backend. An unset thread
+choice uses the configured defaults above.
+
+External clients can use the existing experimental `thread/metadata/update`
+request with `{"threadId":"THREAD_ID","daybreakEnabled":false}` or `true`.
+After its acknowledgment, new turns use that choice. Automatic goal turns use
+the saved choice rather than a selection carried from an earlier turn. A fresh
+explicit `turn/start.cyberAccessProgram` still wins. The current turn, including
+its tool calls and compaction, keeps its original selection. Interrupted-turn
+recovery also keeps the interrupted turn's persisted selection; it is not a new
+turn. Neither the goal nor the conversation needs to be replaced.
+
+## Hide the buffering popup
+
+To hide the informational “Giving this request a little extra thought” banner
+and faster-model retry menu, set this in the connecting TUI's configuration:
+
+```toml
+[tui]
+show_safety_buffering = false
+```
+
+The default is `true`. Restart the connecting TUI to load the display preference;
+the app server does not need a restart for this setting. Backend checks, waiting,
+refusals, verification, and diagnostic events are unchanged. It does not
+automatically retry or switch models. The patched TUI must be running to use it.
 
 ## Build the patched package
 
@@ -66,10 +101,10 @@ cd codex-cyber
 The branch sets `[workspace.package].version` in `codex-rs/Cargo.toml` to:
 
 ```toml
-version = "0.161.0+cyber.1"
+version = "0.162.0+cyber.1"
 ```
 
-This identifies the patched build based on upstream tag `rust-v0.161.0`.
+This identifies the patched build based on upstream tag `rust-v0.162.0`.
 Codex sends its compiled version to the backend; leaving it at
 `0.0.0` can cause compatible models to be rejected with a misleading
 ChatGPT-account error. Setting only the package builder's `--package-version`
@@ -104,7 +139,7 @@ Run the package directly:
 ./codex-cyber-package/bin/codex
 ```
 
-The reported version should be `0.161.0+cyber.1`. You can move the complete
+The reported version should be `0.162.0+cyber.1`. You can move the complete
 package directory to a permanent location and put a symlink to its `bin/codex`
 on your PATH under a distinct name such as `codex-cyber`.
 
@@ -124,13 +159,17 @@ use the same Codex configuration and state by default.
 
 Regression tests cover configuration precedence, model switches, native goal
 creation and continuation, subagent inheritance, API-key policy, and compaction
-with the selected program.
+with the selected program. They also cover live preference changes, cold resume,
+and the optional buffering UI.
 Run the focused tests when updating the upstream base:
 
 ```bash
-just test -p codex-core --lib -E 'test(cyber_access_program)'
+just test -p codex-config -p codex-core -p codex-tui --lib \
+  -E 'test(cyber_access_program) | test(daybreak) | test(safety_buffering)'
 just test -p codex-core -p codex-app-server --test all \
-  -E 'test(cyber_access_program) | test(model_switch_program_pair)'
+  -E 'test(cyber_access_program) | test(daybreak_metadata_toggle) | test(saved_daybreak_choice) | test(model_switch_program_pair)'
+just test -p codex-exec --test all \
+  -E 'test(daybreak) | test(cyber_access_program)'
 ```
 
 After installing, verify a real tool call as well as model selection. A

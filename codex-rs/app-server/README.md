@@ -37,8 +37,12 @@ include the initial choice in `thread.daybreakEnabled`. The choice is staged
 with the thread's other initial metadata and saved when the thread is persisted.
 An unused thread is not guaranteed to survive restart. Omitted or null leaves
 the choice unset. Ephemeral threads cannot save it.
-Use `thread/metadata/update` for later changes. This preference does not select
-`turn/start.cyberAccessProgram` or grant access to an access program.
+Use `thread/metadata/update` for later changes. On this branch the saved choice
+also selects the program for new turns, including automatic goal continuations,
+unless the caller provides an explicit `turn/start.cyberAccessProgram`.
+Off selects standard; on uses the model's advertised Daybreak program, with
+Blue as the explicit request when no Daybreak program is advertised. Access
+still depends on account entitlement and model compatibility.
 
 Configure defaults for native OpenAI, ChatGPT-authenticated turns in the server's
 Codex config, a named `~/.codex/<name>.config.toml` profile, or an agent role file:
@@ -55,20 +59,25 @@ Values are `auto`, `standard`, `daybreak_blue`, and `daybreak_red`. `auto` omits
 the request field; `standard` explicitly requests standard treatment. Model keys
 match the selected model id exactly, without prefix or wildcard matching.
 Configuration layers merge first, then each new turn selects its program in this
-order: explicit `turn/start.cyberAccessProgram`, exact-model config, global config,
-inherited parent program, backend automatic behavior. A profile or role can
-override individual model entries with `auto`; changing only the global default
-does not erase inherited model entries. A child's own configuration takes
-precedence over its parent's program, including for follow-up messages.
+order: explicit `turn/start.cyberAccessProgram`, saved thread choice, exact-model
+config, global config, inherited parent program, backend automatic behavior.
+A profile or role can override individual model entries with `auto`; changing
+only the global default does not erase inherited model entries. A child's own
+configuration takes precedence over its parent's program, including for follow-up messages.
 
 Defaults are evaluated again for each new turn, including automatic goal
-continuations and turns after a model switch. They do not change an active turn;
-remote compaction uses that turn's selection. Interrupted-turn recovery retains
+continuations and turns after a model switch. Acknowledged metadata updates take
+effect for new turns without reloading the thread. They do not change an active
+turn; remote compaction uses that turn's selection. Interrupted-turn recovery retains
 an explicitly persisted program rather than reselecting it from defaults.
+Automatic goal continuations use the saved thread choice instead of an explicit
+selection carried from the earlier turn. A fresh explicit `turn/start` still
+takes precedence.
 Backend entitlement and model-compatibility checks still apply, and failures do
 not trigger a fallback to another program. Configured defaults do not apply to
-API-key authentication; explicit API-key selection follows the native
-`api_key_cyber_access_programs` feature policy. Custom providers remain unchanged.
+API-key authentication; saved thread choices and explicit API-key selection follow
+the native `api_key_cyber_access_programs` opt-in policy. Custom providers remain
+unchanged.
 A remote TUI must connect to an app server running this support;
 client-side launch overrides do not reconfigure an already-running remote server.
 

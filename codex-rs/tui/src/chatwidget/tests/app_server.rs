@@ -508,6 +508,42 @@ async fn safety_buffering_ignores_hidden_stale_and_historical_updates() {
 }
 
 #[tokio::test]
+async fn disabled_safety_buffering_ui_keeps_the_turn_without_a_prompt_or_retry() {
+    for faster_model in [None, Some("faster-model")] {
+        let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.local_settings.tui.show_safety_buffering = false;
+        let (thread_id, turn_id, _) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
+        let before = render_bottom_popup(&chat, /*width*/ 80);
+        let notification = safety_buffering_notification(thread_id, turn_id, faster_model);
+        chat.handle_server_notification(
+            ServerNotification::ModelSafetyBufferingUpdated(notification.clone()),
+            /*replay_kind*/ None,
+        );
+        assert_eq!(render_bottom_popup(&chat, /*width*/ 80), before);
+        assert!(chat.turn_lifecycle.agent_turn_running);
+        assert!(chat.safety_buffering_is_waiting());
+        chat.handle_server_notification(
+            ServerNotification::ModelSafetyBufferingUpdated(notification),
+            /*replay_kind*/ None,
+        );
+        assert_eq!(render_bottom_popup(&chat, /*width*/ 80), before);
+        chat.on_agent_message_delta("Visible response".to_owned());
+        assert!(!chat.safety_buffering_is_waiting());
+        handle_turn_completed(&mut chat, turn_id, /*duration_ms*/ None);
+        assert!(!chat.turn_lifecycle.agent_turn_running);
+        assert!(!chat.can_retry_safety_buffered_turn(turn_id));
+        assert!(op_rx.try_recv().is_err());
+        while let Ok(event) = rx.try_recv() {
+            assert!(!matches!(
+                event,
+                AppEvent::ConfirmSafetyBufferedRetry { .. }
+                    | AppEvent::RetrySafetyBufferedTurn { .. }
+            ));
+        }
+    }
+}
+
+#[tokio::test]
 async fn tool_suggestion_install_url_is_validated_before_opening() {
     for install_url in [
         "file:///tmp/connector",

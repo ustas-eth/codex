@@ -13,6 +13,7 @@ use codex_protocol::turn_input::CyberAccessProgram;
 use codex_protocol::user_input::UserInput;
 use codex_rollout::RolloutItem;
 use codex_rollout::RolloutRecorder;
+use codex_thread_store::ThreadMetadataPatch;
 use core_test_support::responses;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
@@ -28,8 +29,12 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+#[test_case(false; "unset_thread_choice")]
+#[test_case(true; "toggled_goal_turn")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn recover_turn_restores_cyber_access_program_without_making_it_sticky() -> Result<()> {
+async fn recover_turn_restores_cyber_access_program_without_making_it_sticky(
+    saved_off: bool,
+) -> Result<()> {
     // Keep sampling pending until interruption so restart must reload the unfinished turn.
     let (release_response, response_gate) = oneshot::channel();
     let (initial_server, _completions) =
@@ -49,6 +54,7 @@ async fn recover_turn_restores_cyber_access_program_without_making_it_sticky() -
             }])
             .on_start(TurnStartOptions {
                 cyber_access_program: Some(CyberAccessProgram::DaybreakBlue),
+                turn_trigger: saved_off.then(|| "goal".to_owned()),
                 ..Default::default()
             }),
         )
@@ -57,6 +63,18 @@ async fn recover_turn_restores_cyber_access_program_without_making_it_sticky() -
         panic!("expected a new turn");
     };
     initial_server.wait_for_request_count(/*count*/ 1).await;
+    if saved_off {
+        initial
+            .codex
+            .update_thread_metadata(
+                ThreadMetadataPatch {
+                    daybreak_enabled: Some(false),
+                    ..Default::default()
+                },
+                /*include_archived*/ true,
+            )
+            .await?;
+    }
     initial.codex.submit(Op::Interrupt).await?;
     wait_for_event(&initial.codex, |event| {
         matches!(event, EventMsg::TurnAborted(_))
@@ -152,11 +170,12 @@ async fn recover_turn_restores_cyber_access_program_without_making_it_sticky() -
     })
     .await;
     assert_eq!(
-        next_response
-            .single_request()
-            .body_json()
-            .get("access_programs"),
-        None
+        next_response.single_request().body_json()["access_programs"],
+        if saved_off {
+            json!({"cyber": "standard"})
+        } else {
+            json!(null)
+        }
     );
     test.codex.shutdown_and_wait().await?;
     Ok(())
@@ -195,6 +214,79 @@ async fn configured_program_applies_to_new_turns_but_explicit_selection_wins() -
     Ok(())
 }
 
+#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), false; "subscription")]
+#[test_case(CodexAuth::from_api_key("test-key"), true; "api_key_opt_in")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn saved_daybreak_choice_updates_new_turns_and_survives_resume(
+    auth: CodexAuth,
+    api_key_programs_enabled: bool,
+) -> Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let configure = move |config: &mut codex_core::config::Config| {
+        config.model = Some("gpt-5.4".to_owned());
+        config.cyber_access_program = Some(CyberAccessProgramPreference::DaybreakBlue);
+        config
+            .cyber_access_program_by_model
+            .insert("gpt-5.4".to_owned(), CyberAccessProgramPreference::Auto);
+        if api_key_programs_enabled {
+            config
+                .features
+                .enable(Feature::ApiKeyCyberAccessPrograms)
+                .unwrap();
+        }
+    };
+    let mut builder = test_codex().with_auth(auth).with_config(configure);
+    let test = builder.build_with_auto_env(&server).await?;
+    for (saved, explicit, expected) in [
+        (None, None, json!(null)),
+        (Some(false), None, json!({"cyber": "standard"})),
+        (Some(true), None, json!({"cyber": "daybreak_blue"})),
+        (
+            None,
+            Some(CyberAccessProgram::DaybreakRed),
+            json!({"cyber": "daybreak_red"}),
+        ),
+        (None, None, json!({"cyber": "daybreak_blue"})),
+        (Some(false), None, json!({"cyber": "standard"})),
+    ] {
+        if let Some(enabled) = saved {
+            let stored = test
+                .codex
+                .update_thread_metadata(
+                    ThreadMetadataPatch {
+                        daybreak_enabled: Some(enabled),
+                        ..Default::default()
+                    },
+                    /*include_archived*/ true,
+                )
+                .await?;
+            assert_eq!(stored.daybreak_enabled, Some(enabled));
+        }
+        let requests =
+            responses::mount_sse_once(&server, responses::sse_completed("saved-choice")).await;
+        submit(&test, explicit).await?;
+        assert_eq!(
+            requests.single_request().body_json()["access_programs"],
+            expected
+        );
+    }
+    // Builder config mutators run once; cold resume needs the same opt-in and model settings.
+    let resumed = builder
+        .with_config(configure)
+        .restart(&server, &test)
+        .await?;
+    let requests =
+        responses::mount_sse_once(&server, responses::sse_completed("resumed-choice")).await;
+    submit(&resumed, None).await?;
+    assert_eq!(
+        requests.single_request().body_json()["access_programs"],
+        json!({"cyber": "standard"})
+    );
+    resumed.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
 #[test_case::test_case(false; "api_key_programs_disabled")]
 #[test_case::test_case(true; "api_key_programs_enabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -221,6 +313,17 @@ async fn configured_defaults_preserve_api_key_access_policy(
         })
         .build_with_auto_env(&server)
         .await?;
+    if !api_key_programs_enabled {
+        test.codex
+            .update_thread_metadata(
+                ThreadMetadataPatch {
+                    daybreak_enabled: Some(true),
+                    ..Default::default()
+                },
+                /*include_archived*/ true,
+            )
+            .await?;
+    }
     let default_response =
         responses::mount_sse_once(&server, responses::sse_completed("default")).await;
     submit(&test, None).await?;

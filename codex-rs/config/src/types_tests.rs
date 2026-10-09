@@ -2,6 +2,16 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn safety_buffering_ui_defaults_on_and_can_be_disabled() {
+    assert!(toml::from_str::<Tui>("").unwrap().show_safety_buffering);
+    assert!(
+        !toml::from_str::<Tui>("show_safety_buffering = false")
+            .unwrap()
+            .show_safety_buffering
+    );
+}
+
+#[test]
 fn mouse_scroll_speed_accepts_integer_and_fractional_multipliers() {
     for (value, expected) in [("1", 1.0), ("0.5", 0.5), ("3.0", 3.0)] {
         let tui: Tui = toml::from_str(&format!("mouse_scroll_speed = {value}")).unwrap();

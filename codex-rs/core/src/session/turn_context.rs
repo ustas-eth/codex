@@ -315,6 +315,8 @@ pub(crate) struct NewTurnContextOptions {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) cyber_access_program: Option<CyberAccessProgram>,
     pub(crate) inherited_cyber_access_program: Option<CyberAccessProgram>,
+    /// Goal continuations carry old options, rather than a fresh explicit program choice.
+    pub(crate) goal_continuation: bool,
 }
 
 /// The context needed for a single turn of the thread.
@@ -1386,11 +1388,16 @@ impl Session {
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         turn_context.final_output_json_schema = options.final_output_json_schema;
+        let daybreak_preference = self.state.lock().await.daybreak_preference;
+        let explicit_program = options
+            .cyber_access_program
+            .filter(|_| !options.goal_continuation || daybreak_preference.is_none());
         turn_context.cyber_access_program = cyber_access_program::for_turn(
             &turn_context.config,
-            &turn_context.model_info().slug,
+            turn_context.model_info(),
             self.services.auth_manager.auth_cached().as_ref(),
-            options.cyber_access_program,
+            explicit_program,
+            daybreak_preference,
             options.inherited_cyber_access_program,
         );
         let turn_context = Arc::new(turn_context);

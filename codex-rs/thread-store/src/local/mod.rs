@@ -290,6 +290,32 @@ impl LocalThreadStore {
         self.state_db.clone()
     }
 
+    /// Read the choice before lazy rollout creation, preserving pending-to-durable ordering.
+    pub(crate) async fn daybreak_preference(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreResult<Option<bool>> {
+        let pending = self.pending_thread_metadata.lock(thread_id).await;
+        if let Some(enabled) = pending
+            .as_ref()
+            .and_then(|patch| patch.as_ref())
+            .and_then(|patch| patch.daybreak_enabled)
+        {
+            return Ok(Some(enabled));
+        }
+        let Some(state_db) = self.state_db().await else {
+            return Ok(None);
+        };
+        let metadata =
+            state_db
+                .get_thread(thread_id)
+                .await
+                .map_err(|err| ThreadStoreError::Internal {
+                    message: format!("failed to read Daybreak preference for {thread_id}: {err}"),
+                })?;
+        Ok(metadata.and_then(|metadata| metadata.daybreak_enabled))
+    }
+
     async fn thread_history_db(&self) -> ThreadStoreResult<&sqlx::SqlitePool> {
         if self.state_db.is_none() {
             return Err(ThreadStoreError::Unsupported {

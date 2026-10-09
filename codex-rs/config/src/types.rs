@@ -851,6 +851,11 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub show_server_version_notice: bool,
 
+    /// Show the informational safety-buffering banner and faster-model retry menu.
+    /// Defaults to `true`. Backend checks and turn execution are unaffected.
+    #[serde(default = "default_true")]
+    pub show_safety_buffering: bool,
+
     /// Generate automatic conversation recaps when the terminal is unfocused.
     /// Defaults to `true`. Disabling this leaves `/recap` available on demand.
     #[serde(default = "default_true")]

@@ -137,7 +137,7 @@ async fn thread_start_rejects_daybreak_for_ephemeral_threads() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_forwards_explicit_cyber_access_program() -> Result<()> {
+async fn turn_start_overrides_saved_cyber_access_program_without_replacing_it() -> Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let programs = [
@@ -189,12 +189,12 @@ async fn turn_start_forwards_explicit_cyber_access_program() -> Result<()> {
             .map(|request| request.body_json().get("access_programs").cloned())
             .collect::<Vec<_>>(),
         [
-            None,
+            Some(json!({"cyber": "daybreak_blue"})),
             Some(json!({"cyber": "daybreak_blue"})),
             Some(json!({"cyber": "daybreak_red"})),
-            None,
+            Some(json!({"cyber": "daybreak_blue"})),
             Some(json!({"cyber": "standard"})),
-            None,
+            Some(json!({"cyber": "daybreak_blue"})),
         ]
     );
     Ok(())
@@ -536,10 +536,10 @@ async fn daybreak_thread_metadata_persists_independently_across_restart_and_fork
             .map(|request| request.body_json()["access_programs"].clone())
             .collect::<Vec<_>>(),
         [
-            json!(null),
+            json!({"cyber": "daybreak_blue"}),
             json!({"cyber": "standard"}),
-            json!(null),
-            json!(null),
+            json!({"cyber": "daybreak_blue"}),
+            json!({"cyber": "standard"}),
         ]
     );
     Ok(())

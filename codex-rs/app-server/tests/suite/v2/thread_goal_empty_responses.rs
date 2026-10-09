@@ -16,11 +16,155 @@ use codex_app_server_protocol::TurnStatus;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_features::Feature;
 use core_test_support::responses;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::timeout;
+
+#[test_case::test_case(false; "automatic_start")]
+#[test_case::test_case(true; "explicit_start")]
+#[tokio::test]
+async fn daybreak_metadata_toggle_applies_to_next_automatic_goal_turn(
+    explicit_start: bool,
+) -> Result<()> {
+    let (release_first, first_gate) = tokio::sync::oneshot::channel();
+    let (release_second, second_gate) = tokio::sync::oneshot::channel();
+    let (release_third, third_gate) = tokio::sync::oneshot::channel();
+    let scripts = [first_gate, second_gate, third_gate]
+        .into_iter()
+        .enumerate()
+        .map(|(index, gate)| {
+            vec![StreamingSseChunk {
+                gate: Some(gate),
+                body: responses::sse(vec![responses::ev_completed(&format!("goal-{index}"))]),
+            }]
+        })
+        .collect();
+    let (server, _) = start_streaming_sse_server(scripts).await;
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "model = \"gpt-5.4\"\napproval_policy = \"never\"\nopenai_base_url = \"{}/v1\"\ncyber_access_program = \"daybreak_blue\"\ncli_auth_credentials_store = \"file\"\n[features]\ngoals = true\nenable_request_compression = false\n",
+            server.uri(),
+        ),
+    )?;
+    write_chatgpt_auth(
+        home.path(),
+        ChatGptAuthFixture::new("test-token"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .without_managed_config()
+        .build_initialized()
+        .await?;
+    let request = app
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            daybreak_enabled: Some(false),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse { thread, .. } = app.read_response(request).await?;
+    let request = app
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id, "objective": "Finish the fixture task",
+                "status": if explicit_start { "paused" } else { "active" },
+            })),
+        )
+        .await?;
+    let _: ThreadGoalSetResponse = app.read_response(request).await?;
+    if explicit_start {
+        let request = app
+            .send_raw_request(
+                "turn/start",
+                Some(json!({
+                    "threadId": thread.id, "cyberAccessProgram": "daybreakBlue",
+                    "input": [{"type": "text", "text": "Continue the fixture task."}],
+                })),
+            )
+            .await?;
+        let _: serde_json::Value = app.read_response(request).await?;
+    }
+    for (index, enabled, release) in [(1, true, release_first), (2, false, release_second)] {
+        timeout(
+            Duration::from_secs(30),
+            server.wait_for_request_count(index),
+        )
+        .await?;
+        if explicit_start && index == 1 {
+            let request = app
+                .send_raw_request(
+                    "thread/goal/set",
+                    Some(json!({
+                        "threadId": thread.id, "status": "active",
+                    })),
+                )
+                .await?;
+            let _: ThreadGoalSetResponse = app.read_response(request).await?;
+        }
+        let request = app
+            .send_raw_request(
+                "thread/metadata/update",
+                Some(json!({
+                    "threadId": thread.id, "daybreakEnabled": enabled,
+                })),
+            )
+            .await?;
+        let result: serde_json::Value = app.read_response(request).await?;
+        assert_eq!(result["thread"]["daybreakEnabled"], json!(enabled));
+        release.send(()).unwrap();
+        let completed: TurnCompletedNotification = timeout(
+            Duration::from_secs(30),
+            app.read_notification("turn/completed"),
+        )
+        .await??;
+        assert_eq!(completed.turn.status, TurnStatus::Completed);
+        assert_eq!(completed.turn.error, None);
+    }
+    timeout(Duration::from_secs(30), server.wait_for_request_count(3)).await?;
+    let request = app
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id, "status": "paused",
+            })),
+        )
+        .await?;
+    let _: ThreadGoalSetResponse = app.read_response(request).await?;
+    release_third.send(()).unwrap();
+    let completed: TurnCompletedNotification = timeout(
+        Duration::from_secs(30),
+        app.read_notification("turn/completed"),
+    )
+    .await??;
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    assert_eq!(completed.turn.error, None);
+    let programs = server
+        .requests()
+        .await
+        .iter()
+        .map(|body| {
+            serde_json::from_slice::<serde_json::Value>(body).unwrap()["access_programs"].clone()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        programs,
+        vec![
+            json!({"cyber": if explicit_start { "daybreak_blue" } else { "standard" }}),
+            json!({"cyber": "daybreak_blue"}),
+            json!({"cyber": "standard"}),
+        ]
+    );
+    server.shutdown().await;
+    Ok(())
+}
 
 #[derive(Clone, Copy)]
 enum GoalCreation {

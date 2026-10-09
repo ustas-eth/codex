@@ -168,6 +168,12 @@ impl ChatWidget {
             agent_message_started: false,
         });
 
+        if !self.local_settings.tui.show_safety_buffering {
+            self.bottom_pane
+                .dismiss_view_by_id(SAFETY_BUFFERING_PROMPT_VIEW_ID);
+            return;
+        }
+
         let status_details = if can_offer_retry {
             format!("{SAFETY_BUFFERING_HEADER} {SAFETY_BUFFERING_MESSAGE_WITH_RETRY}")
         } else {

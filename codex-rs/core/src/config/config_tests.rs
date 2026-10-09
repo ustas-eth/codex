@@ -1263,6 +1263,7 @@ fn config_toml_deserializes_model_availability_nux() {
             rendering: Default::default(),
             show_tooltips: true,
             show_server_version_notice: true,
+            show_safety_buffering: true,
             auto_recap: true,
             disable_paste_burst: None,
             vim_mode_default: false,
@@ -1308,6 +1309,20 @@ status_line_use_colors = false
             .expect("tui config should deserialize")
             .status_line_use_colors
     );
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_safety_buffering_ui() -> anyhow::Result<()> {
+    for (text, expected) in [("", true), ("[tui]\nshow_safety_buffering = false", false)] {
+        let config = Config::load_from_base_config_with_overrides(
+            toml::from_str::<ConfigToml>(text)?,
+            ConfigOverrides::default(),
+            tempdir()?.abs(),
+        )
+        .await?;
+        assert_eq!(config.tui_show_safety_buffering, expected);
+    }
+    Ok(())
 }
 
 #[test]
@@ -4406,6 +4421,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             rendering: Default::default(),
             show_tooltips: true,
             show_server_version_notice: true,
+            show_safety_buffering: true,
             auto_recap: true,
             disable_paste_burst: None,
             vim_mode_default: false,

@@ -144,6 +144,49 @@ async fn pending_thread_metadata_is_consumed_by_first_metadata_update() {
 }
 
 #[tokio::test]
+async fn daybreak_preference_read_keeps_unused_threads_unmaterialized() {
+    for enabled in [None, Some(false), Some(true)] {
+        let (_home, store, runtime) = store_with_runtime().await;
+        let thread_id = ThreadId::new();
+        if let Some(enabled) = enabled {
+            store
+                .stage_pending_thread_metadata(
+                    thread_id,
+                    ThreadMetadataPatch {
+                        daybreak_enabled: Some(enabled),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("stage Daybreak choice");
+        }
+        let live = LiveThread::create(store.clone(), create_thread_params(thread_id))
+            .await
+            .expect("create lazy thread");
+        assert_eq!(
+            live.daybreak_preference().await.expect("read choice"),
+            enabled
+        );
+        assert!(
+            runtime
+                .get_thread(thread_id)
+                .await
+                .expect("read metadata")
+                .is_none()
+        );
+        assert!(
+            !live
+                .local_rollout_path()
+                .await
+                .expect("read rollout path")
+                .expect("local path")
+                .exists()
+        );
+        live.discard().await.expect("discard unused writer");
+    }
+}
+
+#[tokio::test]
 async fn pending_rollout_compatible_metadata_does_not_deadlock() {
     let (_home, store, runtime) = store_with_runtime().await;
     let thread_id = ThreadId::new();

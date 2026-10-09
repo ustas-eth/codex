@@ -1531,6 +1531,9 @@ impl Session {
                 ),
             );
             state.base_instructions_provenance = base_instructions_provenance.clone();
+            if let Some(live_thread) = live_thread.as_ref() {
+                state.daybreak_preference = live_thread.daybreak_preference().await?;
+            }
             state.active_disabled_plugin_ids = session_configuration.disabled_plugin_ids.clone();
             let managed_network_requirements_configured = config
                 .config_layer_stack
